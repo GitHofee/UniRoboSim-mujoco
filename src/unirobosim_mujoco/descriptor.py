@@ -1,0 +1,56 @@
+"""Static, import-safe MuJoCo capability declaration."""
+
+from unirobosim import CapabilityDeclaration, CapabilityId, CapabilitySet, FrozenMap, ProviderDescriptor
+
+CAPABILITIES = CapabilitySet(
+    (
+        CapabilityDeclaration(
+            CapabilityId("profile.core-robotics@1"),
+            FrozenMap(
+                {
+                    "coordinate_system": "right-handed-z-up",
+                    "quaternion_order": "xyzw",
+                    "array_layout": "batch-first",
+                }
+            ),
+        ),
+        CapabilityDeclaration(CapabilityId("world.multi-environment@1")),
+        CapabilityDeclaration(CapabilityId("state.rigid_body@1")),
+        CapabilityDeclaration(CapabilityId("control.rigid_body.wrench@1")),
+        CapabilityDeclaration(CapabilityId("contact.binary@1")),
+        CapabilityDeclaration(CapabilityId("contact.net_normal_force@1")),
+        CapabilityDeclaration(CapabilityId("state.articulation@1")),
+        CapabilityDeclaration(CapabilityId("control.articulation.position@1")),
+        CapabilityDeclaration(CapabilityId("control.articulation.velocity@1")),
+        CapabilityDeclaration(CapabilityId("control.articulation.effort@1")),
+        CapabilityDeclaration(
+            CapabilityId("sensor.camera@1"),
+            FrozenMap({"schedule": "synchronous", "pose_frame": "environment-local-world"}),
+        ),
+        CapabilityDeclaration(CapabilityId("sensor.camera.rgb@1")),
+        CapabilityDeclaration(CapabilityId("sensor.camera.depth@1")),
+        CapabilityDeclaration(
+            CapabilityId("debug.sink.native_overlay@1"),
+            FrozenMap({"endpoint": "mjvScene-compatible", "portable_store": True}),
+            limitations=("headless worlds retain debug geometry for Studio instead of opening a native viewer",),
+        ),
+        CapabilityDeclaration(CapabilityId("scene.snapshot@1")),
+        CapabilityDeclaration(CapabilityId("scene.delta@1")),
+        CapabilityDeclaration(CapabilityId("scene.command.pose@1")),
+        CapabilityDeclaration(
+            CapabilityId("scene.command.drag@1"),
+            FrozenMap({"entity_kinds": ["rigid_body"], "modes": ["kinematic"]}),
+            limitations=("constraint drag is not exposed in the initial adapter",),
+        ),
+        CapabilityDeclaration(CapabilityId("render.browser-scene@1")),
+    )
+)
+
+DESCRIPTOR = ProviderDescriptor(
+    "google-deepmind.mujoco",
+    "UniRoboSim MuJoCo",
+    "0.1.0a0",
+    "v0alpha5",
+    CAPABILITIES,
+    FrozenMap({"mujoco": "3.11.0", "python": "3.12"}),
+)
