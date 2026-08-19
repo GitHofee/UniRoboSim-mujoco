@@ -16,11 +16,11 @@
 conda create -n unirobosim-mujoco python=3.12 pip -y
 conda activate unirobosim-mujoco
 git clone https://github.com/GitHofee/UniRoboSim.git
-git clone https://github.com/GitHofee/UniRoboSim-mujuco.git
-python -m pip install ./UniRoboSim ./UniRoboSim-mujuco
+git clone https://github.com/GitHofee/UniRoboSim-mujoco.git
+python -m pip install ./UniRoboSim ./UniRoboSim-mujoco
 ```
 
-内部 Git 仓库按指定保留 `mujuco` 拼写；Python distribution、import 包、backend ID 和仿真器名称均使用标准 `mujoco` 拼写。
+GitHub 仓库、Python distribution、import 包、backend ID 和仿真器名称均使用标准 `mujoco` 拼写。
 
 ## 使用
 

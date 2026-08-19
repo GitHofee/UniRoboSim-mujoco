@@ -16,11 +16,11 @@
 conda create -n unirobosim-mujoco python=3.12 pip -y
 conda activate unirobosim-mujoco
 git clone https://github.com/GitHofee/UniRoboSim.git
-git clone https://github.com/GitHofee/UniRoboSim-mujuco.git
-python -m pip install ./UniRoboSim ./UniRoboSim-mujuco
+git clone https://github.com/GitHofee/UniRoboSim-mujoco.git
+python -m pip install ./UniRoboSim ./UniRoboSim-mujoco
 ```
 
-The internal Git repository keeps the requested `mujuco` spelling; the Python distribution, import package, backend identifier, and simulator name use the standard `mujoco` spelling.
+The GitHub repository, Python distribution, import package, backend identifier, and simulator name all use the standard `mujoco` spelling.
 
 ## Usage
 
