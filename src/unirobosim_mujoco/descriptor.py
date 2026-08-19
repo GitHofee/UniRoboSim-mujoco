@@ -14,6 +14,19 @@ CAPABILITIES = CapabilitySet(
                 }
             ),
         ),
+        CapabilityDeclaration(
+            CapabilityId("asset.formats@1"),
+            FrozenMap(
+                {
+                    "rigid_body": ["application/xml", "model/vnd.mujoco.mjcf+xml"],
+                    "articulation": [
+                        "application/xml",
+                        "model/vnd.mujoco.mjcf+xml",
+                        "model/vnd.urdf+xml",
+                    ],
+                }
+            ),
+        ),
         CapabilityDeclaration(CapabilityId("world.multi-environment@1")),
         CapabilityDeclaration(CapabilityId("state.rigid_body@1")),
         CapabilityDeclaration(CapabilityId("control.rigid_body.wrench@1")),
@@ -49,7 +62,7 @@ CAPABILITIES = CapabilitySet(
 DESCRIPTOR = ProviderDescriptor(
     "google-deepmind.mujoco",
     "UniRoboSim MuJoCo",
-    "0.1.0a0",
+    "0.2.0a0",
     "v0alpha5",
     CAPABILITIES,
     FrozenMap({"mujoco": "3.11.0", "python": "3.12"}),

@@ -76,6 +76,21 @@ def _write_two_joint_urdf(path: Path) -> None:
     )
 
 
+def _write_free_rigid_mjcf(path: Path) -> None:
+    path.write_text(
+        """<mujoco model="rigid_asset">
+  <worldbody>
+    <body name="object">
+      <freejoint name="object_free"/>
+      <geom type="box" size="0.1 0.2 0.3" mass="1"/>
+    </body>
+  </worldbody>
+</mujoco>
+""",
+        encoding="utf-8",
+    )
+
+
 def world_spec(*, camera: bool = False, gravity: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> WorldSpec:
     entities = [
         EntitySpec(EntityPath("/box"), EntityKind.RIGID_BODY, pose=Pose((0.0, 0.0, 1.0))),
@@ -274,6 +289,29 @@ def test_native_urdf_joint_mapping_inertia_repair_and_control(tmp_path: Path) ->
         assert world.read_articulation(handle).joint_positions.rows()[0] == pytest.approx((-0.2, 0.1))
     finally:
         session.close()
+
+
+def test_native_mjcf_rigid_asset_easyapi_state_wrench_and_reset(tmp_path: Path) -> None:
+    asset = tmp_path / "rigid.xml"
+    _write_free_rigid_mjcf(asset)
+    expected = (1.0, 2.0, 3.0)
+    sim = Sim(
+        provider=MuJoCoProvider(),
+        world_id="mujoco-native-rigid",
+        time_step_seconds=0.002,
+        gravity_m_s2=(0.0, 0.0, 0.0),
+    )
+    body = sim.add_rigid_body("object", asset_uri=str(asset), position_m=expected)
+    try:
+        sim.start()
+        assert body.state.positions_m.rows()[0] == pytest.approx(expected)
+        body.apply_wrench((2.0, 0.0, 0.0))
+        sim.step(20)
+        assert body.state.positions_m.rows()[0][0] > expected[0]
+        sim.reset()
+        assert body.state.positions_m.rows()[0] == pytest.approx(expected)
+    finally:
+        sim.close()
 
 
 def test_native_debug_scene_snapshot_and_drag_transaction() -> None:

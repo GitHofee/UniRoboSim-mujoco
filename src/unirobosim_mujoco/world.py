@@ -166,26 +166,14 @@ class MuJoCoWorld:
                     entity_path=entity.path.value,
                     details={"entity_kind": entity.kind.value},
                 )
-            if entity.asset_uri is not None and entity.kind is not EntityKind.ARTICULATION:
-                raise WorldBuildError(
-                    "MuJoCo asset loading is currently supported for articulations",
-                    operation="mujoco.build.preflight",
-                    backend_id=backend_id,
-                    world_id=spec.world_id,
-                    entity_path=entity.path.value,
-                )
-        asset_articulations = tuple(
-            entity
-            for entity in spec.entities
-            if entity.kind is EntityKind.ARTICULATION and entity.asset_uri is not None
-        )
-        if len(asset_articulations) > 1:
+        asset_entities = tuple(entity for entity in spec.entities if entity.asset_uri is not None)
+        if len(asset_entities) > 1:
             raise WorldBuildError(
-                "the current MuJoCo asset composition profile accepts one asset articulation per world",
+                "the current MuJoCo asset composition profile accepts one native asset entity per world",
                 operation="mujoco.build.preflight",
                 backend_id=backend_id,
                 world_id=spec.world_id,
-                details={"asset_articulations": [entity.path.value for entity in asset_articulations]},
+                details={"asset_entities": [entity.path.value for entity in asset_entities]},
             )
 
     @staticmethod
@@ -193,16 +181,16 @@ class MuJoCoWorld:
         parsed = urlparse(asset_uri)
         if parsed.scheme not in {"", "file"}:
             raise WorldBuildError(
-                "MuJoCo requires a local articulation asset",
-                operation="mujoco.build.articulation",
+                "MuJoCo requires a local native asset",
+                operation="mujoco.build.asset",
                 entity_path=entity.path.value,
                 details={"asset_uri": asset_uri, "scheme": parsed.scheme},
             )
         path = Path(unquote(parsed.path) if parsed.scheme == "file" else asset_uri).expanduser().resolve()
         if not path.is_file():
             raise WorldBuildError(
-                "MuJoCo articulation asset does not exist",
-                operation="mujoco.build.articulation",
+                "MuJoCo native asset does not exist",
+                operation="mujoco.build.asset",
                 entity_path=entity.path.value,
                 details={"asset_uri": asset_uri, "resolved_path": str(path)},
             )
@@ -217,7 +205,7 @@ class MuJoCoWorld:
                 [mujoco.MjModel.from_xml_string(xml) for _ in range(spec.environments.count)],
                 procedural_names,
             )
-        assert asset.kind is EntityKind.ARTICULATION and asset.asset_uri is not None
+        assert asset.kind in {EntityKind.RIGID_BODY, EntityKind.ARTICULATION} and asset.asset_uri is not None
         path = cls._local_asset_path(asset.asset_uri, asset)
         native_spec = mujoco.MjSpec.from_file(str(path))
         # Vendor URDFs frequently contain rounded inertias that violate the strict
@@ -246,23 +234,40 @@ class MuJoCoWorld:
         root_body = native_spec.worldbody.first_body()
         if root_body is None or native_spec.worldbody.next_body(root_body) is not None:
             raise WorldBuildError(
-                "MuJoCo articulation assets must contain exactly one top-level body",
-                operation="mujoco.build.articulation",
+                "MuJoCo native assets must contain exactly one top-level body",
+                operation="mujoco.build.asset",
                 entity_path=asset.path.value,
                 details={"asset_uri": asset.asset_uri},
             )
         root_body.pos = asset.pose.position
         x, y, z, w = asset.pose.orientation_xyzw
         root_body.quat = (w, x, y, z)
-        # PyBullet's default URDF profile and the current Isaac asset both disable
-        # internal robot collisions. Mirror that policy while retaining collisions
-        # between the articulation and external scene bodies.
-        asset_body_names = tuple(body.name for body in native_spec.bodies if body.name)
-        existing_excludes = {frozenset((exclude.bodyname1, exclude.bodyname2)) for exclude in native_spec.excludes}
-        for first, second in combinations(asset_body_names, 2):
-            if frozenset((first, second)) not in existing_excludes:
-                native_spec.add_exclude(bodyname1=first, bodyname2=second)
-        names: dict[EntityPath, dict[str, object]] = {asset.path: {"body": root_body.name, "joints": asset.joint_names}}
+        if asset.kind is EntityKind.ARTICULATION:
+            # PyBullet's default URDF profile and the current Isaac asset both disable
+            # internal robot collisions. Mirror that policy while retaining collisions
+            # between the articulation and external scene bodies.
+            asset_body_names = tuple(body.name for body in native_spec.bodies if body.name)
+            existing_excludes = {
+                frozenset((exclude.bodyname1, exclude.bodyname2)) for exclude in native_spec.excludes
+            }
+            for first, second in combinations(asset_body_names, 2):
+                if frozenset((first, second)) not in existing_excludes:
+                    native_spec.add_exclude(bodyname1=first, bodyname2=second)
+            asset_record: dict[str, object] = {"body": root_body.name, "joints": asset.joint_names}
+        else:
+            free_joint = next(
+                (joint for joint in native_spec.joints if int(joint.type) == int(mujoco.mjtJoint.mjJNT_FREE)),
+                None,
+            )
+            if free_joint is None or not free_joint.name:
+                raise WorldBuildError(
+                    "MuJoCo rigid assets must contain one named free joint",
+                    operation="mujoco.build.rigid",
+                    entity_path=asset.path.value,
+                    details={"asset_uri": asset.asset_uri},
+                )
+            asset_record = {"body": root_body.name, "free": free_joint.name}
+        names: dict[EntityPath, dict[str, object]] = {asset.path: asset_record}
         native_spec.worldbody.add_geom(
             name="__unirobosim_ground",
             type=mujoco.mjtGeom.mjGEOM_PLANE,
