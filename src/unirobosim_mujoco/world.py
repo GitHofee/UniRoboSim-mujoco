@@ -247,9 +247,7 @@ class MuJoCoWorld:
             # internal robot collisions. Mirror that policy while retaining collisions
             # between the articulation and external scene bodies.
             asset_body_names = tuple(body.name for body in native_spec.bodies if body.name)
-            existing_excludes = {
-                frozenset((exclude.bodyname1, exclude.bodyname2)) for exclude in native_spec.excludes
-            }
+            existing_excludes = {frozenset((exclude.bodyname1, exclude.bodyname2)) for exclude in native_spec.excludes}
             for first, second in combinations(asset_body_names, 2):
                 if frozenset((first, second)) not in existing_excludes:
                     native_spec.add_exclude(bodyname1=first, bodyname2=second)
@@ -401,9 +399,7 @@ class MuJoCoWorld:
                         for value in ((0.15, 0.7, 0.95, 1.0) if entity.box is None else entity.box.color_rgba)
                     ),
                     friction=(
-                        "1 0.005 0.0001"
-                        if box_geometry is None
-                        else f"{box_geometry.static_friction} 0.005 0.0001"
+                        "1 0.005 0.0001" if box_geometry is None else f"{box_geometry.static_friction} 0.005 0.0001"
                     ),
                 )
                 record.update(body=body_name, free=free_name)

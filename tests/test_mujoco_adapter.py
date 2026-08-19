@@ -38,7 +38,7 @@ from unirobosim import (
     WorldSpec,
 )
 
-from unirobosim_mujoco import MuJoCoAdapterConfig, MuJoCoProvider
+from unirobosim_mujoco import DESCRIPTOR, MuJoCoAdapterConfig, MuJoCoProvider, __version__
 from unirobosim_mujoco.world import MuJoCoWorld
 
 
@@ -144,6 +144,9 @@ def scene_command(
 
 
 def test_probe_config_and_lifecycle() -> None:
+    assert __version__ == "0.7.0"
+    assert DESCRIPTOR.version == __version__
+    assert DESCRIPTOR.contract_version == "v0alpha4"
     provider = MuJoCoProvider()
     probe = provider.probe()
     assert probe.available and provider.descriptor.provider_id == "google-deepmind.mujoco"

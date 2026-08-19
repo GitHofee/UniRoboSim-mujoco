@@ -62,8 +62,8 @@ CAPABILITIES = CapabilitySet(
 DESCRIPTOR = ProviderDescriptor(
     "google-deepmind.mujoco",
     "UniRoboSim MuJoCo",
-    "0.2.0a0",
-    "v0alpha5",
+    "0.7.0",
+    "v0alpha4",
     CAPABILITIES,
     FrozenMap({"mujoco": "3.11.0", "python": "3.12"}),
 )
