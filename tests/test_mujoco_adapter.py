@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from unirobosim import (
@@ -163,7 +165,7 @@ def test_probe_config_and_lifecycle() -> None:
         ("velocity_gain", -1.0),
     ):
         with pytest.raises(ValidationError):
-            MuJoCoAdapterConfig(**{field: value})
+            cast(Any, MuJoCoAdapterConfig)(**{field: value})
     configured = MuJoCoAdapterConfig(
         joint_position_stiffness=(("door_hinge", 250.0),),
         joint_position_damping=(("door_hinge", 15.0),),
@@ -180,6 +182,39 @@ def test_probe_config_and_lifecycle() -> None:
     world.close()
     assert session.state.value == "open"
     session.close()
+
+
+def test_joint_gain_lookups_are_precomputed_immutable_and_keep_the_scalar_fast_path() -> None:
+    configured = MuJoCoAdapterConfig(
+        joint_position_stiffness=(("door_hinge", 250.0),),
+        joint_position_damping=(("door_hinge", 15.0),),
+    )
+    stiffness_lookup = configured._joint_position_stiffness_lookup
+    damping_lookup = configured._joint_position_damping_lookup
+    assert configured.position_stiffness_for("door_hinge") == 250.0
+    assert configured.position_damping_for("door_hinge") == 15.0
+    assert configured._joint_position_stiffness_lookup is stiffness_lookup
+    assert configured._joint_position_damping_lookup is damping_lookup
+    with pytest.raises(TypeError):
+        cast(Any, stiffness_lookup)["door_hinge"] = 1.0
+    with pytest.raises(TypeError):
+        cast(Any, damping_lookup)["door_hinge"] = 1.0
+
+    class FailOnLookup(Mapping[str, float]):
+        def __getitem__(self, key: str) -> float:
+            raise AssertionError(f"default scalar path consulted override lookup for {key}")
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(())
+
+        def __len__(self) -> int:
+            return 0
+
+    defaults = MuJoCoAdapterConfig()
+    object.__setattr__(defaults, "_joint_position_stiffness_lookup", FailOnLookup())
+    object.__setattr__(defaults, "_joint_position_damping_lookup", FailOnLookup())
+    assert defaults.position_stiffness_for("any_joint") == 100.0
+    assert defaults.position_damping_for("any_joint") == 8.0
 
 
 def test_gui_mode_launches_syncs_and_closes_passive_viewer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,14 +242,15 @@ def test_gui_mode_launches_syncs_and_closes_passive_viewer(monkeypatch: pytest.M
             viewers.append(viewer)
             return viewer
 
-    native_import_module = world_module.importlib.import_module
+    world_importlib = cast(Any, world_module).importlib
+    native_import_module = world_importlib.import_module
 
-    def import_with_fake_viewer(name: str):
+    def import_with_fake_viewer(name: str) -> Any:
         if name == "mujoco.viewer":
             return FakeViewerModule
         return native_import_module(name)
 
-    monkeypatch.setattr(world_module.importlib, "import_module", import_with_fake_viewer)
+    monkeypatch.setattr(world_importlib, "import_module", import_with_fake_viewer)
     provider = MuJoCoProvider(MuJoCoAdapterConfig(headless=False))
     session = provider.open()
     single_environment = replace(world_spec(), environments=EnvironmentSpec(1))

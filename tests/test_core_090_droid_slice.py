@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from unirobosim import (
@@ -123,7 +124,9 @@ def test_core_090_v5_droid_planning_units_resources_and_same_tick_commands() -> 
     )
     session = MuJoCoProvider().open()
     world = session.build(spec, build_input=build_input)
+    assert world._asset_lease is not None
     snapshot_root = world._asset_lease.root
+    planning_world = cast(Any, world)
     try:
         handle = world.resolve(EntityPath("/droid"))
         state = world.read_articulation(handle)
@@ -131,7 +134,7 @@ def test_core_090_v5_droid_planning_units_resources_and_same_tick_commands() -> 
         assert state.joint_position_units == ("rad",) * 13
         assert state.joint_velocity_units == ("rad/s",) * 13
 
-        catalog = world.planning_scene_catalog()
+        catalog = planning_world.planning_scene_catalog()
         robot = next(entity for entity in catalog.entities if entity.path == "/droid")
         authored_links = {link.authored_name for link in catalog.links if link.entity_id == robot.entity_id}
         moving = {
@@ -144,7 +147,7 @@ def test_core_090_v5_droid_planning_units_resources_and_same_tick_commands() -> 
         assert len(robot.joint_ids) == 21
         assert len(robot.geometry_ids) == 19
         geometry = next(item for item in catalog.geometries if item.resource_id is not None)
-        lease = world.resolve_planning_geometry(geometry.geometry_id)
+        lease = planning_world.resolve_planning_geometry(geometry.geometry_id)
         assert hashlib.sha256(lease.read()).hexdigest() == geometry.sha256
         lease.close()
 
@@ -179,9 +182,9 @@ def test_core_090_v5_droid_planning_units_resources_and_same_tick_commands() -> 
                 )
             )
         assert world.read_articulation(handle).joint_positions.rows()[0] == before
-        sequence = world.planning_scene_state().sequence
+        sequence = planning_world.planning_scene_state().sequence
         world.step(10)
-        assert world.planning_scene_delta(sequence).kind.value == "state"
+        assert planning_world.planning_scene_delta(sequence).kind.value == "state"
         assert world.read_articulation(handle).joint_positions.rows()[0] != before
     finally:
         world.close()

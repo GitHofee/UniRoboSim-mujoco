@@ -13,9 +13,9 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
-import mujoco
+import mujoco  # type: ignore[import-untyped]
 import numpy as np
 from unirobosim import (
     WORLD_SCHEMA_VERSION,
@@ -96,7 +96,10 @@ def _create_acceptance_provider(*, visible_window: bool = False) -> Any:
             position_stiffness=_POSITION_STIFFNESS,
             position_damping=_POSITION_DAMPING,
             joint_position_stiffness=tuple((joint, 100.0) for joint in _GRIPPER),
-            joint_position_damping=tuple((joint, 8.0) for joint in _GRIPPER),
+            joint_position_damping=(
+                tuple((joint, 36.0) for joint in _ARM[:4])
+                + tuple((joint, 8.0) for joint in _GRIPPER)
+            ),
         )
     )
 
@@ -131,6 +134,20 @@ def _cross(left: tuple[float, float, float], right: tuple[float, float, float]) 
     )
 
 
+def _tuple3(values: Any) -> tuple[float, float, float]:
+    converted = tuple(float(value) for value in values)
+    if len(converted) != 3:
+        raise ValueError("expected exactly three numeric values")
+    return converted
+
+
+def _tuple4(values: Any) -> tuple[float, float, float, float]:
+    converted = tuple(float(value) for value in values)
+    if len(converted) != 4:
+        raise ValueError("expected exactly four numeric values")
+    return converted
+
+
 def _matrix_quaternion(matrix: tuple[tuple[float, float, float], ...]) -> tuple[float, float, float, float]:
     m00, m01, m02 = matrix[0]
     m10, m11, m12 = matrix[1]
@@ -150,10 +167,10 @@ def _matrix_quaternion(matrix: tuple[tuple[float, float, float], ...]) -> tuple[
 
 
 def _camera_pose(camera: Any) -> Pose:
-    eye = tuple(float(value) for value in camera["eye_m"])
-    look_at = tuple(float(value) for value in camera["look_at_m"])
-    authored_up = tuple(float(value) for value in camera["up"])
-    forward = _normalize(tuple(look_at[index] - eye[index] for index in range(3)))
+    eye = _tuple3(camera["eye_m"])
+    look_at = _tuple3(camera["look_at_m"])
+    authored_up = _tuple3(camera["up"])
+    forward = _normalize(_tuple3(look_at[index] - eye[index] for index in range(3)))
     right = _normalize(_cross(forward, authored_up))
     up = _normalize(_cross(right, forward))
     backward = tuple(-value for value in forward)
@@ -167,8 +184,8 @@ def _scenario(entity: dict[str, object]) -> Any:
     scene = {"robots": {"droid": entity}}
     return ScenarioPlan(
         schema="fastsim-scenario-plan/1",
-        source=freeze({"authoring_path": "droid-equivalence", "kind": "inline"}),
-        scene=freeze(scene),
+        source=cast(Any, freeze({"authoring_path": "droid-equivalence", "kind": "inline"})),
+        scene=cast(Any, freeze(scene)),
         behavior=None,
         evaluation=None,
         digest=content_digest(
@@ -217,9 +234,9 @@ def _execution_plan(spec: Any) -> Any:
         variant="mujoco",
         capabilities=(),
         requires=(),
-        semantics=freeze(semantics),
-        defaults=freeze({}),
-        config_schema=freeze({}),
+        semantics=cast(Any, freeze(semantics)),
+        defaults=cast(Any, freeze({})),
+        config_schema=cast(Any, freeze({})),
         resources=(resource,),
     )
     entity = {
@@ -260,13 +277,13 @@ def _execution_plan(spec: Any) -> Any:
         schema="fastsim-execution-plan/2",
         name="droid-equivalence-mujoco",
         backend="mujoco",
-        runtime=freeze(runtime),
+        runtime=cast(Any, freeze(runtime)),
         scenario=_scenario(entity),
-        entities=freeze({"robots.droid": entity}),
-        control=freeze({"default_robot": "droid", "precedence": []}),
-        plugins=freeze({}),
+        entities=cast(Any, freeze({"robots.droid": entity})),
+        control=cast(Any, freeze({"default_robot": "droid", "precedence": []})),
+        plugins=cast(Any, freeze({})),
         components=(component,),
-        provenance=freeze({}),
+        provenance=cast(Any, freeze({})),
         authoring_sha256=hashlib.sha256(b"droid-equivalence-authoring/1").hexdigest(),
         effective_sha256=hashlib.sha256(b"droid-equivalence-effective/mujoco/1").hexdigest(),
         digest="",
@@ -296,12 +313,12 @@ def _acceptance_projection(plan: Any, spec: Any, *, visible_window: bool = False
         EntityPath("/red-cube"),
         EntityKind.RIGID_BODY,
         pose=Pose(
-            tuple(float(value) for value in cube_spec["pose_world"]["position_m"]),
-            tuple(float(value) for value in cube_spec["pose_world"]["quaternion_xyzw"]),
+            _tuple3(cube_spec["pose_world"]["position_m"]),
+            _tuple4(cube_spec["pose_world"]["quaternion_xyzw"]),
         ),
         box=BoxGeometrySpec(
-            dimensions_m=tuple(float(value) for value in cube_spec["size_m"]),
-            color_rgba=tuple(float(value) for value in cube_spec["rgba"]),
+            dimensions_m=_tuple3(cube_spec["size_m"]),
+            color_rgba=_tuple4(cube_spec["rgba"]),
         ),
         metadata=FrozenMap({"planning_entity_kind": "rigid_object"}),
     )
@@ -318,7 +335,7 @@ def _acceptance_projection(plan: Any, spec: Any, *, visible_window: bool = False
             far_plane_m=float(camera_spec["far_m"]),
         ),
     )
-    gravity = tuple(float(value) for value in spec["simulation"]["gravity_m_s2"])
+    gravity = _tuple3(spec["simulation"]["gravity_m_s2"])
     physics = replace(projection.world_spec.physics, gravity_m_s2=gravity)
     world_spec = replace(
         projection.world_spec,
@@ -441,17 +458,17 @@ class _CaptureParticipant:
         focal_px = actual_height / (2.0 * math.tan(math.radians(vertical_fov) / 2.0))
         horizontal_fov = math.degrees(2.0 * math.atan(actual_width / (2.0 * focal_px)))
         camera_rotation = np.asarray(data.cam_xmat[camera_id], dtype=np.float64).reshape(3, 3)
-        eye = tuple(float(item) for item in data.cam_xpos[camera_id])
-        forward = _normalize(tuple(float(-camera_rotation[index, 2]) for index in range(3)))
-        authored_eye = tuple(float(item) for item in self._camera["eye_m"])
-        authored_target = tuple(float(item) for item in self._camera["look_at_m"])
+        eye = _tuple3(data.cam_xpos[camera_id])
+        forward = _normalize(_tuple3(-camera_rotation[index, 2] for index in range(3)))
+        authored_eye = _tuple3(self._camera["eye_m"])
+        authored_target = _tuple3(self._camera["look_at_m"])
         focus_distance = math.dist(authored_eye, authored_target)
         look_at = tuple(eye[index] + focus_distance * forward[index] for index in range(3))
-        authored_up = _normalize(tuple(float(item) for item in self._camera["up"]))
-        optical_up = _normalize(tuple(float(camera_rotation[index, 1]) for index in range(3)))
+        authored_up = _normalize(_tuple3(self._camera["up"]))
+        optical_up = _normalize(_tuple3(camera_rotation[index, 1] for index in range(3)))
         up_forward_component = sum(authored_up[index] * forward[index] for index in range(3))
         projected_up = _normalize(
-            tuple(authored_up[index] - up_forward_component * forward[index] for index in range(3))
+            _tuple3(authored_up[index] - up_forward_component * forward[index] for index in range(3))
         )
         if max(abs(left - right) for left, right in zip(optical_up, projected_up, strict=True)) > 1.0e-9:
             raise RuntimeError("MuJoCo native camera roll differs from the authored world-up reference")

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from unirobosim import ValidationError
 
@@ -20,6 +22,16 @@ class MuJoCoAdapterConfig:
     velocity_gain: float = 20.0
     max_motor_effort: float = 50.0
     headless: bool = True
+    _joint_position_stiffness_lookup: Mapping[str, float] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _joint_position_damping_lookup: Mapping[str, float] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.headless, bool):
@@ -72,8 +84,23 @@ class MuJoCoAdapterConfig:
         ):
             raise ValidationError("max_motor_effort must be positive and finite", operation="mujoco.config")
 
+        object.__setattr__(
+            self,
+            "_joint_position_stiffness_lookup",
+            MappingProxyType({joint_name: float(value) for joint_name, value in self.joint_position_stiffness}),
+        )
+        object.__setattr__(
+            self,
+            "_joint_position_damping_lookup",
+            MappingProxyType({joint_name: float(value) for joint_name, value in self.joint_position_damping}),
+        )
+
     def position_stiffness_for(self, joint_name: str) -> float:
-        return float(dict(self.joint_position_stiffness).get(joint_name, self.position_stiffness))
+        if not self.joint_position_stiffness:
+            return float(self.position_stiffness)
+        return self._joint_position_stiffness_lookup.get(joint_name, float(self.position_stiffness))
 
     def position_damping_for(self, joint_name: str) -> float:
-        return float(dict(self.joint_position_damping).get(joint_name, self.position_damping))
+        if not self.joint_position_damping:
+            return float(self.position_damping)
+        return self._joint_position_damping_lookup.get(joint_name, float(self.position_damping))
