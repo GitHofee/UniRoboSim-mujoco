@@ -2,15 +2,15 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`unirobosim-mujoco` is the MuJoCo 3.11 backend for UniRoboSim `0.7.x`. It is selected through the standard `unirobosim.backends` entry point, so the same EasyAPI application can switch to MuJoCo with `backend="mujoco"`.
+`unirobosim-mujoco` is the MuJoCo 3.11 backend for UniRoboSim `0.9.x`. It is selected through the standard `unirobosim.backends` entry point, so the same EasyAPI application can switch to MuJoCo with `backend="mujoco"`.
 
 ## Compatibility and installation
 
 - Python `>=3.12,<3.13`
-- UniRoboSim `>=0.7.0,<0.8`
+- UniRoboSim `>=0.9,<0.10`
 - MuJoCo `3.11.0`
 - NumPy `>=2.2,<3`
-- Runtime contract `v0alpha4`
+- Runtime contract `v0alpha5`
 
 ```bash
 conda create -n unirobosim-mujoco python=3.12 pip -y
@@ -88,6 +88,6 @@ coverage run -m pytest
 coverage report
 ```
 
-The 0.7.0 native suite passes 15 tests with branch coverage above the release threshold, and the built wheel passes a clean-environment EasyAPI camera/state/scene smoke test.
+The 0.9.0 native suite passes 17 tests, including the DROID planning and same-tick command slice.
 
 Portable API documentation is maintained in [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git).

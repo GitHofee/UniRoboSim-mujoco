@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -35,9 +36,11 @@ from unirobosim import (
     StaleHandleError,
     UnsupportedCapabilityError,
     ValidationError,
+    WorldBuildError,
     WorldSpec,
 )
 
+import unirobosim_mujoco.world as world_module
 from unirobosim_mujoco import DESCRIPTOR, MuJoCoAdapterConfig, MuJoCoProvider, __version__
 from unirobosim_mujoco.world import MuJoCoWorld
 
@@ -144,14 +147,16 @@ def scene_command(
 
 
 def test_probe_config_and_lifecycle() -> None:
-    assert __version__ == "0.7.0"
+    assert __version__ == "0.9.0"
     assert DESCRIPTOR.version == __version__
-    assert DESCRIPTOR.contract_version == "v0alpha4"
+    assert DESCRIPTOR.contract_version == "v0alpha5"
     provider = MuJoCoProvider()
     probe = provider.probe()
     assert probe.available and provider.descriptor.provider_id == "google-deepmind.mujoco"
     with pytest.raises(ValidationError):
         MuJoCoAdapterConfig(render_width=0)
+    with pytest.raises(ValidationError):
+        MuJoCoAdapterConfig(headless=1)  # type: ignore[arg-type]
     for field, value in (
         ("position_stiffness", -1.0),
         ("position_damping", float("nan")),
@@ -159,11 +164,71 @@ def test_probe_config_and_lifecycle() -> None:
     ):
         with pytest.raises(ValidationError):
             MuJoCoAdapterConfig(**{field: value})
+    configured = MuJoCoAdapterConfig(
+        joint_position_stiffness=(("door_hinge", 250.0),),
+        joint_position_damping=(("door_hinge", 15.0),),
+    )
+    assert configured.position_stiffness_for("door_hinge") == 250.0
+    assert configured.position_stiffness_for("drawer_slide") == 100.0
+    assert configured.position_damping_for("door_hinge") == 15.0
+    assert configured.position_damping_for("drawer_slide") == 8.0
+    with pytest.raises(ValidationError):
+        MuJoCoAdapterConfig(joint_position_stiffness=(("door_hinge", 1.0), ("door_hinge", 2.0)))
     session = provider.open()
     world = session.build(world_spec())
     assert session.state is SessionState.READY and world.build_report.environment_count == 2
     world.close()
     assert session.state.value == "open"
+    session.close()
+
+
+def test_gui_mode_launches_syncs_and_closes_passive_viewer(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeViewer:
+        def __init__(self) -> None:
+            self.sync_count = 0
+            self.closed = False
+
+        def sync(self) -> None:
+            self.sync_count += 1
+
+        def is_running(self) -> bool:
+            return not self.closed
+
+        def close(self) -> None:
+            self.closed = True
+
+    viewers: list[FakeViewer] = []
+
+    class FakeViewerModule:
+        @staticmethod
+        def launch_passive(*args: object, **kwargs: object) -> FakeViewer:
+            del args, kwargs
+            viewer = FakeViewer()
+            viewers.append(viewer)
+            return viewer
+
+    native_import_module = world_module.importlib.import_module
+
+    def import_with_fake_viewer(name: str):
+        if name == "mujoco.viewer":
+            return FakeViewerModule
+        return native_import_module(name)
+
+    monkeypatch.setattr(world_module.importlib, "import_module", import_with_fake_viewer)
+    provider = MuJoCoProvider(MuJoCoAdapterConfig(headless=False))
+    session = provider.open()
+    single_environment = replace(world_spec(), environments=EnvironmentSpec(1))
+    world = session.build(single_environment)
+    assert len(viewers) == 1 and viewers[0].sync_count == 1
+    world.step()
+    assert viewers[0].sync_count == 2
+    world.close()
+    assert viewers[0].closed
+    session.close()
+
+    session = provider.open()
+    with pytest.raises(WorldBuildError):
+        session.build(world_spec())
     session.close()
 
 
@@ -376,6 +441,15 @@ def test_native_offscreen_camera_rgb_and_depth() -> None:
         sample = world.read_sensor(world.resolve(EntityPath("/camera")))
         assert sample.channel(CameraModality.RGB).shape == (2, 24, 32, 3)
         assert sample.channel(CameraModality.DEPTH).shape == (2, 24, 32)
+        camera = world._entities[EntityPath("/camera")].camera
+        assert camera is not None
+        expected_vertical_fov = math.degrees(
+            2.0
+            * math.atan(
+                math.tan(math.radians(camera.horizontal_fov_degrees) / 2.0) / (camera.width_px / camera.height_px)
+            )
+        )
+        assert float(world._models[0].cam_fovy[0]) == pytest.approx(expected_vertical_fov)
     finally:
         session.close()
 

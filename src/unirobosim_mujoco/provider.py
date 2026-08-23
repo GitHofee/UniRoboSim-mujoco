@@ -9,19 +9,25 @@ from types import TracebackType
 from typing import TYPE_CHECKING
 
 from unirobosim import (
+    WORLD_SCHEMA_UNSUPPORTED,
+    BuildInput,
+    CapabilityId,
     CapabilityNegotiationError,
     CapabilityRequirement,
     LifecycleError,
     NegotiationReport,
+    PlanningSceneError,
     ProbeReport,
     ProviderDescriptor,
     ProviderSelectionError,
     SessionState,
+    UnsupportedCapabilityError,
     ValidationError,
     WorldBuildError,
     WorldSpec,
 )
 
+from .build_assets import snapshot_build_input
 from .config import MuJoCoAdapterConfig
 from .descriptor import DESCRIPTOR
 
@@ -105,12 +111,25 @@ class MuJoCoSession:
         self._ensure("mujoco.session.negotiate", ready=True)
         return self.descriptor.capabilities.negotiate(tuple(requirements))
 
-    def build(self, spec: WorldSpec) -> MuJoCoWorld:
+    def build(self, spec: WorldSpec, *, build_input: BuildInput | None = None) -> MuJoCoWorld:
         from .world import MuJoCoWorld
 
         self._ensure("mujoco.session.build")
         if not isinstance(spec, WorldSpec):
             raise ValidationError("build requires a WorldSpec", operation="mujoco.session.build")
+        if spec.schema_version not in self.descriptor.supported_world_schema_versions:
+            raise UnsupportedCapabilityError(
+                "provider does not support the requested World schema",
+                operation="mujoco.session.build",
+                backend_id=self.descriptor.provider_id,
+                world_id=spec.world_id,
+                details={
+                    "detail_code": WORLD_SCHEMA_UNSUPPORTED,
+                    "requested_schema": spec.schema_version,
+                    "provider_id": self.descriptor.provider_id,
+                    "supported_world_schema_versions": self.descriptor.supported_world_schema_versions,
+                },
+            ) from None
         negotiation = self.negotiate(spec.requirements)
         if not negotiation.accepted:
             raise CapabilityNegotiationError(
@@ -120,10 +139,23 @@ class MuJoCoSession:
                 world_id=spec.world_id,
                 details={"negotiation": negotiation.to_dict()},
             )
+        asset_lease = snapshot_build_input(spec, build_input)
         self._generation += 1
+        world: MuJoCoWorld
         try:
-            world = MuJoCoWorld(self, spec, self._generation)
+            if CapabilityId("planning.scene@2") in negotiation.matched:
+                from .planning import MuJoCoPlanningWorld
+
+                world = MuJoCoPlanningWorld(self, spec, self._generation, asset_lease)
+            else:
+                world = MuJoCoWorld(self, spec, self._generation, asset_lease)
+        except PlanningSceneError:
+            if asset_lease is not None:
+                asset_lease.close()
+            raise
         except Exception as exc:
+            if asset_lease is not None:
+                asset_lease.close()
             raise WorldBuildError(
                 "MuJoCo world build failed",
                 operation="mujoco.session.build",

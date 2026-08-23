@@ -1,6 +1,14 @@
 """Static, import-safe MuJoCo capability declaration."""
 
-from unirobosim import CapabilityDeclaration, CapabilityId, CapabilitySet, FrozenMap, ProviderDescriptor
+from unirobosim import (
+    PHYSICAL_WORLD_SCHEMA_VERSION,
+    WORLD_SCHEMA_VERSION,
+    CapabilityDeclaration,
+    CapabilityId,
+    CapabilitySet,
+    FrozenMap,
+    ProviderDescriptor,
+)
 
 CAPABILITIES = CapabilitySet(
     (
@@ -33,7 +41,9 @@ CAPABILITIES = CapabilitySet(
         CapabilityDeclaration(CapabilityId("contact.binary@1")),
         CapabilityDeclaration(CapabilityId("contact.net_normal_force@1")),
         CapabilityDeclaration(CapabilityId("state.articulation@1")),
+        CapabilityDeclaration(CapabilityId("state.articulation.axis-units@1")),
         CapabilityDeclaration(CapabilityId("control.articulation.position@1")),
+        CapabilityDeclaration(CapabilityId("control.articulation.position.axis-units@1")),
         CapabilityDeclaration(CapabilityId("control.articulation.velocity@1")),
         CapabilityDeclaration(CapabilityId("control.articulation.effort@1")),
         CapabilityDeclaration(
@@ -56,14 +66,28 @@ CAPABILITIES = CapabilitySet(
             limitations=("constraint drag is not exposed in the initial adapter",),
         ),
         CapabilityDeclaration(CapabilityId("render.browser-scene@1")),
+        CapabilityDeclaration(
+            CapabilityId("planning.scene@2"),
+            FrozenMap(
+                {
+                    "authority_thread": "synchronous",
+                    "axis_convention": "right_handed_z_up",
+                    "geometry_read_limit_bytes": 64 * 1024 * 1024,
+                    "resource_layout": "catalog-pinned-v1",
+                    "single_representation_per_geometry": True,
+                    "representation_fallback": False,
+                }
+            ),
+        ),
     )
 )
 
 DESCRIPTOR = ProviderDescriptor(
     "google-deepmind.mujoco",
     "UniRoboSim MuJoCo",
-    "0.7.0",
-    "v0alpha4",
+    "0.9.0",
+    "v0alpha5",
     CAPABILITIES,
+    (WORLD_SCHEMA_VERSION, PHYSICAL_WORLD_SCHEMA_VERSION),
     FrozenMap({"mujoco": "3.11.0", "python": "3.12"}),
 )

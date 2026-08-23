@@ -2,15 +2,15 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`unirobosim-mujoco` 是 UniRoboSim `0.7.x` 的 MuJoCo 3.11 后端。它通过标准 `unirobosim.backends` entry point 发现，同一套 EasyAPI 业务只需设置 `backend="mujoco"` 即可切换。
+`unirobosim-mujoco` 是 UniRoboSim `0.9.x` 的 MuJoCo 3.11 后端。它通过标准 `unirobosim.backends` entry point 发现，同一套 EasyAPI 业务只需设置 `backend="mujoco"` 即可切换。
 
 ## 兼容与安装
 
 - Python `>=3.12,<3.13`
-- UniRoboSim `>=0.7.0,<0.8`
+- UniRoboSim `>=0.9,<0.10`
 - MuJoCo `3.11.0`
 - NumPy `>=2.2,<3`
-- Runtime contract `v0alpha4`
+- Runtime contract `v0alpha5`
 
 ```bash
 conda create -n unirobosim-mujoco python=3.12 pip -y
@@ -88,6 +88,6 @@ coverage run -m pytest
 coverage report
 ```
 
-0.7.0 原生套件通过 15 项测试，分支覆盖率高于发布阈值；构建出的 wheel 也已在全新环境中通过 EasyAPI 相机、状态与场景 smoke test。
+0.9.0 原生套件通过 17 项测试，包括 DROID planning 与同 tick 命令切片。
 
 可移植 API 文档位于 [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git)。

@@ -16,6 +16,8 @@ from urllib.parse import unquote, urlparse
 
 import numpy as np
 from unirobosim import (
+    ARTICULATION_AXIS_UNITS_MISMATCH,
+    PHYSICAL_WORLD_SCHEMA_VERSION,
     ArrayValue,
     ArticulationCommand,
     ArticulationState,
@@ -66,6 +68,7 @@ from unirobosim import (
 )
 
 if TYPE_CHECKING:
+    from .build_assets import BuildAssetLease
     from .provider import MuJoCoSession
 
 mujoco: Any = importlib.import_module("mujoco")
@@ -93,8 +96,22 @@ def _xyz(values: tuple[float, float, float]) -> str:
 
 
 class MuJoCoWorld:
-    def __init__(self, session: MuJoCoSession, spec: WorldSpec, generation: int) -> None:
+    def __init__(
+        self,
+        session: MuJoCoSession,
+        spec: WorldSpec,
+        generation: int,
+        asset_lease: BuildAssetLease | None = None,
+    ) -> None:
         self._validate_spec(spec, session.descriptor.provider_id)
+        if not session.config.headless and spec.environments.count != 1:
+            raise ValidationError(
+                "MuJoCo GUI mode requires exactly one environment",
+                operation="mujoco.build.preflight",
+                backend_id=session.descriptor.provider_id,
+                world_id=spec.world_id,
+                details={"environment_count": spec.environments.count},
+            )
         self._session = session
         self._spec = spec
         self._generation = generation
@@ -103,7 +120,8 @@ class MuJoCoWorld:
         self._reset_count = 0
         self._scene_sequence = 0
         self._entities = {entity.path: entity for entity in spec.entities}
-        self._models, names = self._build_models(spec)
+        self._asset_lease = asset_lease
+        self._models, names = self._build_models(spec, asset_lease)
         self._data = [mujoco.MjData(model) for model in self._models]
         self._native = self._resolve_native(self._models[0], spec, names)
         self._commands: list[dict[EntityPath, list[tuple[CommandMode, float]]]] = [
@@ -122,9 +140,27 @@ class MuJoCoWorld:
         self._scene_results: dict[str, SceneCommandResult] = {}
         self._drags: dict[str, tuple[EntityPath, int, Pose]] = {}
         self._renderers: dict[tuple[int, int, int], Any] = {}
+        self._viewers: list[Any] = []
         for model, data in zip(self._models, self._data, strict=True):
             self._write_initial_articulation_positions(data)
             mujoco.mj_forward(model, data)
+        if not session.config.headless:
+            viewer_module = importlib.import_module("mujoco.viewer")
+            try:
+                for model, data in zip(self._models, self._data, strict=True):
+                    viewer = viewer_module.launch_passive(
+                        model,
+                        data,
+                        show_left_ui=False,
+                        show_right_ui=False,
+                    )
+                    self._viewers.append(viewer)
+                    viewer.sync()
+            except Exception:
+                for viewer in self._viewers:
+                    viewer.close()
+                self._viewers.clear()
+                raise
         self._build_report = BuildReport(
             BuildFingerprint(
                 session.descriptor.provider_id,
@@ -177,7 +213,13 @@ class MuJoCoWorld:
             )
 
     @staticmethod
-    def _local_asset_path(asset_uri: str, entity: EntitySpec) -> Path:
+    def _local_asset_path(
+        asset_uri: str,
+        entity: EntitySpec,
+        asset_lease: BuildAssetLease | None,
+    ) -> Path:
+        if asset_lease is not None:
+            return asset_lease.selected_path(entity_id=entity.path.value, asset_uri=asset_uri)
         parsed = urlparse(asset_uri)
         if parsed.scheme not in {"", "file"}:
             raise WorldBuildError(
@@ -197,7 +239,11 @@ class MuJoCoWorld:
         return path
 
     @classmethod
-    def _build_models(cls, spec: WorldSpec) -> tuple[list[Any], dict[EntityPath, dict[str, object]]]:
+    def _build_models(
+        cls,
+        spec: WorldSpec,
+        asset_lease: BuildAssetLease | None,
+    ) -> tuple[list[Any], dict[EntityPath, dict[str, object]]]:
         asset = next((entity for entity in spec.entities if entity.asset_uri is not None), None)
         if asset is None:
             xml, procedural_names = cls._build_xml(spec)
@@ -206,7 +252,7 @@ class MuJoCoWorld:
                 procedural_names,
             )
         assert asset.kind in {EntityKind.RIGID_BODY, EntityKind.ARTICULATION} and asset.asset_uri is not None
-        path = cls._local_asset_path(asset.asset_uri, asset)
+        path = cls._local_asset_path(asset.asset_uri, asset, asset_lease)
         native_spec = mujoco.MjSpec.from_file(str(path))
         # Vendor URDFs frequently contain rounded inertias that violate the strict
         # triangle inequality. MuJoCo's documented compiler repair preserves the
@@ -337,10 +383,16 @@ class MuJoCoWorld:
             else:
                 camera_name = f"{prefix}_camera"
                 orientation = entity.pose.orientation_xyzw
+                assert entity.camera is not None
+                aspect = entity.camera.width_px / entity.camera.height_px
+                vertical_fov = math.degrees(
+                    2.0 * math.atan(math.tan(math.radians(entity.camera.horizontal_fov_degrees) / 2.0) / aspect)
+                )
                 native_spec.worldbody.add_camera(
                     name=camera_name,
                     pos=entity.pose.position,
                     quat=(orientation[3], orientation[0], orientation[1], orientation[2]),
+                    fovy=vertical_fov,
                 )
                 record["camera"] = camera_name
             names[entity.path] = record
@@ -432,12 +484,18 @@ class MuJoCoWorld:
                 record.update(body=body_name, joints=tuple(joint_names))
             else:
                 camera_name = f"{prefix}_camera"
+                assert entity.camera is not None
+                aspect = entity.camera.width_px / entity.camera.height_px
+                vertical_fov = math.degrees(
+                    2.0 * math.atan(math.tan(math.radians(entity.camera.horizontal_fov_degrees) / 2.0) / aspect)
+                )
                 ET.SubElement(
                     worldbody,
                     "camera",
                     name=camera_name,
                     pos=_xyz(entity.pose.position),
                     quat=_wxyz(entity.pose.orientation_xyzw),
+                    fovy=str(vertical_fov),
                 )
                 record["camera"] = camera_name
             names[entity.path] = record
@@ -478,6 +536,21 @@ class MuJoCoWorld:
                     entity_path=entity.path.value,
                     details={"missing": missing, "invalid": invalid, "asset_uri": entity.asset_uri},
                 )
+            expected_units = tuple(
+                "m" if int(model.jnt_type[joint_id]) == int(mujoco.mjtJoint.mjJNT_SLIDE) else "rad"
+                for joint_id in joint_ids
+            )
+            if entity.kind is EntityKind.ARTICULATION and entity.joint_position_units != expected_units:
+                raise WorldBuildError(
+                    "declared articulation units do not match native MuJoCo joint types",
+                    operation="mujoco.build.articulation",
+                    entity_path=entity.path.value,
+                    details={
+                        "detail_code": ARTICULATION_AXIS_UNITS_MISMATCH,
+                        "expected_units": expected_units,
+                        "actual_units": entity.joint_position_units,
+                    },
+                ) from None
             result[entity.path] = _NativeEntity(
                 entity,
                 body_id,
@@ -599,12 +672,39 @@ class MuJoCoWorld:
         degrees = self._indices(command.degree_of_freedom_indices, len(entity.joint_names), "degree", operation)
         if command.targets.shape != (len(environments), len(degrees)):
             raise CommandError("articulation target shape is invalid", operation=operation)
-        for row, environment in enumerate(environments):
-            for column, degree in enumerate(degrees):
-                self._commands[environment][entity.path][degree] = (
-                    command.mode,
-                    float(command.targets.rows()[row][column]),
-                )
+        position_units = tuple(entity.joint_position_units[degree] for degree in degrees)
+        expected_units = {
+            CommandMode.POSITION: position_units,
+            CommandMode.VELOCITY: tuple("rad/s" if unit == "rad" else "m/s" for unit in position_units),
+            CommandMode.EFFORT: tuple("N*m" if unit == "rad" else "N" for unit in position_units),
+        }[command.mode]
+        actual_units = command.target_units
+        if not actual_units and self._spec.schema_version != PHYSICAL_WORLD_SCHEMA_VERSION:
+            actual_units = expected_units
+        if actual_units != expected_units:
+            raise CommandError(
+                "command target units do not match selected articulation axes",
+                operation=operation,
+                backend_id=self._session.descriptor.provider_id,
+                world_id=self.world_id,
+                entity_path=entity.path.value,
+                details={
+                    "detail_code": ARTICULATION_AXIS_UNITS_MISMATCH,
+                    "expected_units": expected_units,
+                    "actual_units": actual_units,
+                },
+            ) from None
+        rows = command.targets.rows()
+        updates = tuple(
+            (environment, degree, command.mode, float(rows[row][column]))
+            for row, environment in enumerate(environments)
+            for column, degree in enumerate(degrees)
+        )
+        for environment, degree, mode, target in updates:
+            self._commands[environment][entity.path][degree] = (
+                mode,
+                target,
+            )
 
     def read_articulation(self, handle: EntityHandle) -> ArticulationState:
         operation = "mujoco.world.read_articulation"
@@ -621,7 +721,16 @@ class MuJoCoWorld:
             tuple(float(self._data[environment].qvel[address]) for address in native.joint_dof_addresses)
             for environment in range(self._spec.environments.count)
         )
-        return ArticulationState(ArrayValue.from_rows(positions), ArrayValue.from_rows(velocities), self.tick)
+        return ArticulationState(
+            entity_id=entity.path.value,
+            generation=self.generation,
+            tick=self.tick,
+            joint_names=entity.joint_names,
+            joint_positions=ArrayValue.from_rows(positions),
+            joint_velocities=ArrayValue.from_rows(velocities),
+            joint_position_units=entity.joint_position_units,
+            joint_velocity_units=tuple("rad/s" if unit == "rad" else "m/s" for unit in entity.joint_position_units),
+        )
 
     def apply_rigid_body_command(self, command: RigidBodyCommand) -> None:
         operation = "mujoco.world.apply_rigid_body_command"
@@ -817,9 +926,12 @@ class MuJoCoWorld:
                 qpos_address = native.joint_qpos_addresses[index]
                 dof_address = native.joint_dof_addresses[index]
                 if mode is CommandMode.POSITION:
-                    joint_force = self._session.config.position_stiffness * (
-                        target - float(data.qpos[qpos_address])
-                    ) - self._session.config.position_damping * float(data.qvel[dof_address])
+                    joint_name = native.spec.joint_names[index]
+                    stiffness = self._session.config.position_stiffness_for(joint_name)
+                    damping = self._session.config.position_damping_for(joint_name)
+                    joint_force = stiffness * (target - float(data.qpos[qpos_address])) - damping * float(
+                        data.qvel[dof_address]
+                    )
                     joint_force += float(data.qfrc_bias[dof_address])
                 elif mode is CommandMode.VELOCITY:
                     joint_force = self._session.config.velocity_gain * (target - float(data.qvel[dof_address]))
@@ -847,6 +959,16 @@ class MuJoCoWorld:
             for environment, (model, data) in enumerate(zip(self._models, self._data, strict=True)):
                 self._apply_controls(environment)
                 mujoco.mj_step(model, data)
+                if self._viewers:
+                    viewer = self._viewers[environment]
+                    if not viewer.is_running():
+                        raise LifecycleError(
+                            "MuJoCo GUI viewer closed while the world is running",
+                            operation="mujoco.world.step",
+                            backend_id=self._session.descriptor.provider_id,
+                            world_id=self.world_id,
+                        )
+                    viewer.sync()
             self._step_index += 1
             for key, expiration in tuple(self._debug_expiration.items()):
                 if expiration is not None and expiration <= self._step_index:
@@ -1025,10 +1147,16 @@ class MuJoCoWorld:
         if self._state is WorldState.CLOSED:
             return
         self._state = WorldState.CLOSED
+        for viewer in self._viewers:
+            viewer.close()
+        self._viewers.clear()
         for renderer in self._renderers.values():
             renderer.close()
         self._renderers.clear()
         self._entities.clear()
+        if self._asset_lease is not None:
+            self._asset_lease.close()
+            self._asset_lease = None
         if notify_session:
             self._session._world_closed(self)
 
