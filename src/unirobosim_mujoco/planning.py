@@ -422,7 +422,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
             int(model.geom_conaffinity[geom_id]),
             _provenance(
                 {
-                    "adapter": "unirobosim-mujoco@0.9.0",
+                    "adapter": "unirobosim-mujoco@0.9.1",
                     "native_profile": "mujoco-3.11-compiled-mesh",
                     "geom_id": geom_id,
                     "mesh_id": mesh_id,
@@ -476,7 +476,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
                 2**32 - 1,
                 _provenance(
                     {
-                        "adapter": "unirobosim-mujoco@0.9.0",
+                        "adapter": "unirobosim-mujoco@0.9.1",
                         "native_profile": "mujoco-plane-z0",
                     }
                 ),
@@ -556,7 +556,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
                             int(model.geom_conaffinity[native_geom_id]),
                             _provenance(
                                 {
-                                    "adapter": "unirobosim-mujoco@0.9.0",
+                                    "adapter": "unirobosim-mujoco@0.9.1",
                                     "native_profile": "mujoco-box",
                                     "dimensions_m": dimensions,
                                 }

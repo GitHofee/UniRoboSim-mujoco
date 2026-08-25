@@ -14,6 +14,7 @@ from unirobosim import (
     CapabilityId,
     CapabilityNegotiationError,
     CapabilityRequirement,
+    EntityKind,
     LifecycleError,
     NegotiationReport,
     PlanningSceneError,
@@ -29,7 +30,7 @@ from unirobosim import (
 
 from .build_assets import snapshot_build_input
 from .config import MuJoCoAdapterConfig
-from .descriptor import DESCRIPTOR
+from .descriptor import descriptor_for_config
 
 if TYPE_CHECKING:
     from .world import MuJoCoWorld
@@ -39,14 +40,15 @@ _SESSION_IDS = itertools.count(1)
 
 class MuJoCoProvider:
     def __init__(self, config: MuJoCoAdapterConfig | None = None) -> None:
-        self._config = config or MuJoCoAdapterConfig()
+        self._config = config if config is not None else MuJoCoAdapterConfig()
         if not isinstance(self._config, MuJoCoAdapterConfig):
             raise ValidationError("config must be MuJoCoAdapterConfig", operation="mujoco.provider.init")
+        self._descriptor = descriptor_for_config(self._config)
         self._active: MuJoCoSession | None = None
 
     @property
     def descriptor(self) -> ProviderDescriptor:
-        return DESCRIPTOR
+        return self._descriptor
 
     def probe(self) -> ProbeReport:
         try:
@@ -112,8 +114,6 @@ class MuJoCoSession:
         return self.descriptor.capabilities.negotiate(tuple(requirements))
 
     def build(self, spec: WorldSpec, *, build_input: BuildInput | None = None) -> MuJoCoWorld:
-        from .world import MuJoCoWorld
-
         self._ensure("mujoco.session.build")
         if not isinstance(spec, WorldSpec):
             raise ValidationError("build requires a WorldSpec", operation="mujoco.session.build")
@@ -130,6 +130,17 @@ class MuJoCoSession:
                     "supported_world_schema_versions": self.descriptor.supported_world_schema_versions,
                 },
             ) from None
+        if not self.config.enable_cameras:
+            camera = next((entity for entity in spec.entities if entity.kind is EntityKind.CAMERA_SENSOR), None)
+            if camera is not None:
+                raise UnsupportedCapabilityError(
+                    "camera entities are disabled by this MuJoCo launch profile",
+                    operation="mujoco.session.build.preflight",
+                    backend_id=self.descriptor.provider_id,
+                    world_id=spec.world_id,
+                    entity_path=camera.path.value,
+                    details={"enable_cameras": False},
+                ) from None
         negotiation = self.negotiate(spec.requirements)
         if not negotiation.accepted:
             raise CapabilityNegotiationError(
@@ -141,6 +152,8 @@ class MuJoCoSession:
             )
         asset_lease = snapshot_build_input(spec, build_input)
         self._generation += 1
+        from .world import MuJoCoWorld
+
         world: MuJoCoWorld
         try:
             if CapabilityId("planning.scene@2") in negotiation.matched:

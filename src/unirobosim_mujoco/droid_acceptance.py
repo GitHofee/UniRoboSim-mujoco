@@ -89,7 +89,11 @@ def _visible_window_detail(display: str, window_id: str, title: str) -> tuple[in
     return area, title
 
 
-def _create_acceptance_provider(*, visible_window: bool = False) -> Any:
+def _create_acceptance_provider(
+    *,
+    visible_window: bool = False,
+    launch_profile: str | None = None,
+) -> Any:
     return create_provider(
         MuJoCoAdapterConfig(
             headless=not visible_window,
@@ -97,28 +101,35 @@ def _create_acceptance_provider(*, visible_window: bool = False) -> Any:
             position_damping=_POSITION_DAMPING,
             joint_position_stiffness=tuple((joint, 100.0) for joint in _GRIPPER),
             joint_position_damping=(
-                tuple((joint, 36.0) for joint in _ARM[:4])
-                + tuple((joint, 8.0) for joint in _GRIPPER)
+                tuple((joint, 36.0) for joint in _ARM[:4]) + tuple((joint, 8.0) for joint in _GRIPPER)
             ),
-        )
+        ),
+        launch_profile=launch_profile,
     )
 
 
 @dataclass(frozen=True, slots=True)
 class _Distribution:
     name: str = "unirobosim-mujoco"
-    version: str = "0.9.0"
+    version: str = "0.9.1"
 
 
 @dataclass(frozen=True, slots=True)
 class _EntryPoint:
     name: str = "mujoco"
     value: str = "unirobosim_mujoco:create_provider"
+    group: str = "unirobosim.backends"
     dist: _Distribution = _Distribution()
     visible_window: bool = False
 
     def load(self) -> Any:
-        return lambda: _create_acceptance_provider(visible_window=self.visible_window)
+        def factory(*, launch_profile: str | None = None) -> Any:
+            return _create_acceptance_provider(
+                visible_window=self.visible_window,
+                launch_profile=launch_profile,
+            )
+
+        return factory
 
 
 def _normalize(values: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -179,7 +190,7 @@ def _camera_pose(camera: Any) -> Pose:
 
 
 def _scenario(entity: dict[str, object]) -> Any:
-    from fastsim.plan import ScenarioPlan, content_digest, freeze
+    from fastsim.plan import ScenarioPlan, content_digest, freeze  # type: ignore[import-not-found]
 
     scene = {"robots": {"droid": entity}}
     return ScenarioPlan(
@@ -199,8 +210,14 @@ def _scenario(entity: dict[str, object]) -> Any:
     )
 
 
-def _execution_plan(spec: Any) -> Any:
-    from fastsim.plan import ExecutionPlan, ResolvedComponent, ResourceRecord, content_digest, freeze
+def _execution_plan(spec: Any, *, visible_window: bool = False) -> Any:
+    from fastsim.plan import (
+        ExecutionPlan,
+        ResolvedComponent,
+        ResourceRecord,
+        content_digest,
+        freeze,
+    )
 
     asset = _ASSET.resolve(strict=True)
     asset_sha256 = hashlib.sha256(asset.read_bytes()).hexdigest()
@@ -266,8 +283,9 @@ def _execution_plan(spec: Any) -> Any:
         "xyz_m": list(spec["robot"]["base_pose_world"]["position_m"]),
         "quat_xyzw": list(spec["robot"]["base_pose_world"]["quaternion_xyzw"]),
     }
-    runtime = {
+    runtime: dict[str, object] = {
         "control_hz": float(spec["simulation"]["physics_hz"]),
+        "launch_profile": "visible" if visible_window else "headless",
         "physics_hz": float(spec["simulation"]["physics_hz"]),
         "rate_policy": "exact",
         "seed": int(spec["simulation"]["seed"]),
@@ -292,7 +310,7 @@ def _execution_plan(spec: Any) -> Any:
 
 
 def _acceptance_projection(plan: Any, spec: Any, *, visible_window: bool = False) -> Any:
-    from fastsim.integrations.unirobosim.projection import project_execution_plan
+    from fastsim.integrations.unirobosim.projection import project_execution_plan  # type: ignore[import-not-found]
 
     projection = project_execution_plan(plan)
     if visible_window:
@@ -361,7 +379,7 @@ class _CaptureParticipant:
         self._closed = False
 
     def participant_spec(self) -> Any:
-        from fastsim.runtime import AuthorityParticipantSpec
+        from fastsim.runtime import AuthorityParticipantSpec  # type: ignore[import-not-found]
 
         return AuthorityParticipantSpec("fastsim.droid_acceptance.capture", 300, self)
 
@@ -666,23 +684,33 @@ def _bundle(
     run_id: str,
     visible_window: bool,
 ) -> tuple[Any, _CaptureParticipant]:
-    from fastsim.control import (
+    from fastsim.control import (  # type: ignore[import-not-found]
         ControlAuthorityDriver,
         ControlChunkExecutor,
         ControlChunkExecutorOptions,
         ControlService,
         ScheduleRatePolicy,
     )
-    from fastsim.integrations.unirobosim.adapter import _UniRoboSimAdapter
-    from fastsim.integrations.unirobosim.composition import UniRoboSimRuntimeBundle, _controller_registry
+    from fastsim.integrations.unirobosim._simulation_query import (  # type: ignore[import-not-found]
+        _SimulationQueryRoot,
+    )
+    from fastsim.integrations.unirobosim.adapter import _UniRoboSimAdapter  # type: ignore[import-not-found]
+    from fastsim.integrations.unirobosim.composition import (  # type: ignore[import-not-found]
+        UniRoboSimRuntimeBundle,
+        _controller_registry,
+    )
     from fastsim.integrations.unirobosim.projection import observation_providers
-    from fastsim.integrations.unirobosim.services import PlanControlCapabilities, PlanWorldDependencies
+    from fastsim.integrations.unirobosim.services import (  # type: ignore[import-not-found]
+        PlanControlCapabilities,
+        PlanWorldDependencies,
+    )
     from fastsim.runtime import RuntimeKernel, RuntimeOptions
 
     adapter = _UniRoboSimAdapter(
         projection,
         entry_points=lambda: (_EntryPoint(visible_window=visible_window),),
     )
+    simulation_root = _SimulationQueryRoot(run_id=run_id, projection=projection)
     executor = ControlChunkExecutor(
         run_id,
         controller_registry=_controller_registry(),
@@ -700,6 +728,7 @@ def _bundle(
         options=RuntimeOptions(step_pacing_seconds=0.0),
         authority_participants=(driver.participant_spec(), capture.participant_spec()),
     )
+    simulation_root._bind_authority_reads(runtime.submit_authority_read, lambda: runtime.snapshot)
     executor.bind_authority_submitter(runtime.submit_authority)
     for provider in observation_providers(projection):
         runtime.observations.register(provider)
@@ -711,6 +740,8 @@ def _bundle(
             adapter=adapter,
             executor=executor,
             planning_raw=None,
+            simulation_root=simulation_root,
+            recording_capture=None,
         ),
         capture,
     )
@@ -729,7 +760,7 @@ def create_backend_run(
         raise TypeError("visible_window must be a boolean")
     if run_kind not in {"rulebased_blocking", "model_servo_preempt"}:
         raise ValueError("unsupported DROID equivalence run kind")
-    plan = _execution_plan(spec)
+    plan = _execution_plan(spec, visible_window=visible_window)
     projection = _acceptance_projection(plan, spec, visible_window=visible_window)
     sample_stride = int(spec["simulation"]["physics_hz"]) // int(spec["simulation"]["sample_hz"])
     bundle, capture = _bundle(

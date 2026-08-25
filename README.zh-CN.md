@@ -2,12 +2,14 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`unirobosim-mujoco` 是 UniRoboSim `0.9.x` 的 MuJoCo 3.11 后端。它通过标准 `unirobosim.backends` entry point 发现，同一套 EasyAPI 业务只需设置 `backend="mujoco"` 即可切换。
+`unirobosim-mujoco` 是 UniRoboSim Core `0.9.x` 与 `0.10.x` 的 MuJoCo
+3.11 后端。它通过标准 `unirobosim.backends` entry point 发现，同一套 EasyAPI
+业务只需设置 `backend="mujoco"` 即可切换。
 
 ## 兼容与安装
 
 - Python `>=3.12,<3.13`
-- UniRoboSim `>=0.9,<0.10`
+- UniRoboSim `>=0.9,<0.11`
 - MuJoCo `3.11.0`
 - NumPy `>=2.2,<3`
 - Runtime contract `v0alpha5`
@@ -59,6 +61,19 @@ provider = MuJoCoProvider(MuJoCoAdapterConfig(position_stiffness=150.0, max_moto
 sim = Sim(provider=provider)
 ```
 
+安装入口工厂同时接受 FastSim 的规范启动档位：
+
+```python
+from unirobosim_mujoco import create_provider
+
+provider = create_provider(launch_profile="headless")
+```
+
+`visible` 开启原生窗口和相机，`headless` 关闭窗口但保留按需相机渲染，
+`headless-physics` 同时关闭窗口和相机。纯物理档位不会声明相机能力，并会明确拒绝
+包含相机的 World。零参数调用保持原有的无头且相机开启行为；可视 World 仍只支持
+单环境。
+
 ## 已实现能力
 
 - 原生 MJCF 与 URDF 铰接体；
@@ -88,6 +103,6 @@ coverage run -m pytest
 coverage report
 ```
 
-0.9.0 原生套件通过 17 项测试，包括 DROID planning 与同 tick 命令切片。
+0.9.1 测试套件除原生 DROID planning 和同 tick 命令执行外，还覆盖启动档位工厂。
 
 可移植 API 文档位于 [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git)。

@@ -82,12 +82,42 @@ CAPABILITIES = CapabilitySet(
     )
 )
 
+_CAMERA_CAPABILITY_IDS = frozenset(
+    {
+        CapabilityId("sensor.camera@1"),
+        CapabilityId("sensor.camera.rgb@1"),
+        CapabilityId("sensor.camera.depth@1"),
+    }
+)
+CAMERA_CAPABILITIES = CapabilitySet(
+    declaration for declaration in CAPABILITIES if declaration.capability in _CAMERA_CAPABILITY_IDS
+)
+PHYSICS_ONLY_CAPABILITIES = CapabilitySet(
+    declaration for declaration in CAPABILITIES if declaration.capability not in _CAMERA_CAPABILITY_IDS
+)
+
 DESCRIPTOR = ProviderDescriptor(
     "google-deepmind.mujoco",
     "UniRoboSim MuJoCo",
-    "0.9.0",
+    "0.9.1",
     "v0alpha5",
     CAPABILITIES,
     (WORLD_SCHEMA_VERSION, PHYSICAL_WORLD_SCHEMA_VERSION),
     FrozenMap({"mujoco": "3.11.0", "python": "3.12"}),
 )
+
+
+def descriptor_for_config(config: object) -> ProviderDescriptor:
+    """Remove camera claims when native camera allocation is disabled."""
+
+    if bool(getattr(config, "enable_cameras", True)):
+        return DESCRIPTOR
+    return ProviderDescriptor(
+        DESCRIPTOR.provider_id,
+        DESCRIPTOR.display_name,
+        DESCRIPTOR.version,
+        DESCRIPTOR.contract_version,
+        PHYSICS_ONLY_CAPABILITIES,
+        DESCRIPTOR.supported_world_schema_versions,
+        DESCRIPTOR.metadata,
+    )

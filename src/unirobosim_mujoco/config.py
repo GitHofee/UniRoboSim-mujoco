@@ -22,6 +22,7 @@ class MuJoCoAdapterConfig:
     velocity_gain: float = 20.0
     max_motor_effort: float = 50.0
     headless: bool = True
+    enable_cameras: bool = True
     _joint_position_stiffness_lookup: Mapping[str, float] = field(
         init=False,
         repr=False,
@@ -34,8 +35,8 @@ class MuJoCoAdapterConfig:
     )
 
     def __post_init__(self) -> None:
-        if not isinstance(self.headless, bool):
-            raise ValidationError("headless must be a boolean", operation="mujoco.config")
+        if not isinstance(self.headless, bool) or not isinstance(self.enable_cameras, bool):
+            raise ValidationError("launch flags must be boolean", operation="mujoco.config")
         values = (self.render_width, self.render_height, self.max_cached_commands)
         if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in values):
             raise ValidationError("MuJoCo adapter limits must be positive integers", operation="mujoco.config")

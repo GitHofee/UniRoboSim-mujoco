@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -13,6 +15,7 @@ from unirobosim import (
     BoxGeometrySpec,
     CameraModality,
     CameraSpec,
+    CapabilityId,
     CapabilityNegotiationError,
     CommandError,
     CommandMode,
@@ -28,6 +31,7 @@ from unirobosim import (
     LifecycleError,
     PhysicsSpec,
     Pose,
+    ProviderSelectionError,
     RigidBodyCommand,
     SceneCommand,
     SceneCommandKind,
@@ -42,8 +46,11 @@ from unirobosim import (
     WorldSpec,
 )
 
+import unirobosim_mujoco as package_module
+import unirobosim_mujoco.provider as provider_module
 import unirobosim_mujoco.world as world_module
-from unirobosim_mujoco import DESCRIPTOR, MuJoCoAdapterConfig, MuJoCoProvider, __version__
+from unirobosim_mujoco import DESCRIPTOR, MuJoCoAdapterConfig, MuJoCoProvider, __version__, create_provider
+from unirobosim_mujoco.droid_acceptance import _EntryPoint
 from unirobosim_mujoco.world import MuJoCoWorld
 
 
@@ -149,7 +156,7 @@ def scene_command(
 
 
 def test_probe_config_and_lifecycle() -> None:
-    assert __version__ == "0.9.0"
+    assert __version__ == "0.9.1"
     assert DESCRIPTOR.version == __version__
     assert DESCRIPTOR.contract_version == "v0alpha5"
     provider = MuJoCoProvider()
@@ -159,6 +166,8 @@ def test_probe_config_and_lifecycle() -> None:
         MuJoCoAdapterConfig(render_width=0)
     with pytest.raises(ValidationError):
         MuJoCoAdapterConfig(headless=1)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        MuJoCoAdapterConfig(enable_cameras=1)  # type: ignore[arg-type]
     for field, value in (
         ("position_stiffness", -1.0),
         ("position_damping", float("nan")),
@@ -182,6 +191,150 @@ def test_probe_config_and_lifecycle() -> None:
     world.close()
     assert session.state.value == "open"
     session.close()
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [
+        ("visible", (False, True)),
+        ("headless", (True, True)),
+        ("headless-physics", (True, False)),
+    ],
+)
+def test_factory_maps_canonical_launch_profiles(profile: str, expected: tuple[bool, bool]) -> None:
+    provider = create_provider(launch_profile=profile)
+
+    assert (provider._config.headless, provider._config.enable_cameras) == expected
+    camera_capabilities = (
+        CapabilityId("sensor.camera@1"),
+        CapabilityId("sensor.camera.rgb@1"),
+        CapabilityId("sensor.camera.depth@1"),
+    )
+    assert all(
+        (provider.descriptor.capabilities.get(capability) is not None) is expected[1]
+        for capability in camera_capabilities
+    )
+
+
+def test_factory_zero_argument_compatibility_and_profile_override() -> None:
+    default = create_provider()
+    configured = create_provider(
+        MuJoCoAdapterConfig(render_width=1280, headless=False, enable_cameras=False),
+        launch_profile="headless",
+    )
+
+    assert (default._config.headless, default._config.enable_cameras) == (True, True)
+    assert default.descriptor is DESCRIPTOR
+    assert configured._config.render_width == 1280
+    assert (configured._config.headless, configured._config.enable_cameras) == (True, True)
+
+
+def test_acceptance_entry_point_accepts_fastsim_launch_profile() -> None:
+    entry_point = _EntryPoint(visible_window=True)
+    provider = entry_point.load()(launch_profile="headless-physics")
+
+    assert entry_point.group == "unirobosim.backends"
+    assert (provider._config.headless, provider._config.enable_cameras) == (True, False)
+    assert provider._config.position_stiffness == 800.0
+
+
+@pytest.mark.parametrize("config", [False, 0, "mujoco", object()])
+def test_provider_and_factory_reject_wrong_config_types(config: object) -> None:
+    with pytest.raises(ValidationError, match="config must be MuJoCoAdapterConfig"):
+        MuJoCoProvider(config)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="config must be MuJoCoAdapterConfig"):
+        create_provider(config, launch_profile="headless")  # type: ignore[arg-type]
+
+
+def test_lazy_world_export_and_unknown_attribute() -> None:
+    assert package_module.MuJoCoWorld is MuJoCoWorld
+    with pytest.raises(AttributeError, match="has no attribute 'unknown'"):
+        _ = package_module.unknown  # type: ignore[attr-defined]
+
+
+def test_probe_and_open_fail_closed_for_missing_or_wrong_native_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = MuJoCoProvider()
+
+    def missing_native(name: str) -> object:
+        del name
+        raise ImportError("missing native")
+
+    monkeypatch.setattr(provider_module.importlib, "import_module", missing_native)
+    probe = provider.probe()
+    assert not probe.available and "missing native" in str(probe.reason)
+    with pytest.raises(ProviderSelectionError, match="compatibility profile is unavailable"):
+        provider.open()
+
+    class WrongVersion:
+        __version__ = "0.0"
+
+    monkeypatch.setattr(provider_module.importlib, "import_module", lambda name: WrongVersion())
+    probe = provider.probe()
+    assert not probe.available and probe.reason == "expected MuJoCo 3.11.0, found 0.0"
+
+
+def test_session_context_manager_closes_and_build_rejects_wrong_type() -> None:
+    provider = MuJoCoProvider()
+    with provider.open() as session:
+        with pytest.raises(ValidationError, match="build requires a WorldSpec"):
+            session.build(None)  # type: ignore[arg-type]
+    assert session.state is SessionState.CLOSED
+
+
+@pytest.mark.parametrize("profile", ["", "VISIBLE", " visible", "visible ", "auto", True, 1])
+def test_factory_rejects_noncanonical_launch_profiles(profile: object) -> None:
+    with pytest.raises(ValidationError) as caught:
+        create_provider(launch_profile=profile)  # type: ignore[arg-type]
+
+    assert caught.value.operation == "mujoco.launch_profile.resolve"
+    assert len(str(caught.value)) < 512
+
+
+def test_physics_only_profile_rejects_camera_world_before_native_allocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = create_provider(launch_profile="headless-physics")
+    session = provider.open()
+    monkeypatch.setattr(
+        "unirobosim_mujoco.provider.snapshot_build_input",
+        lambda *args, **kwargs: pytest.fail("asset or native allocation was reached"),
+    )
+
+    with pytest.raises(UnsupportedCapabilityError) as caught:
+        session.build(world_spec(camera=True))
+
+    assert caught.value.operation == "mujoco.session.build.preflight"
+    assert caught.value.entity_path == "/camera"
+    assert session.state is SessionState.OPEN
+    session.close()
+
+
+def test_factory_discovery_and_profile_mapping_are_native_import_safe() -> None:
+    script = """
+import importlib.abc
+import sys
+
+class RejectNative(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname.split('.', 1)[0] == 'mujoco':
+            raise RuntimeError('native MuJoCo import attempted')
+        return None
+
+sys.meta_path.insert(0, RejectNative())
+from unirobosim_mujoco import create_provider
+provider = create_provider(launch_profile='headless-physics')
+assert provider._config.enable_cameras is False
+assert 'mujoco' not in sys.modules
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_joint_gain_lookups_are_precomputed_immutable_and_keep_the_scalar_fast_path() -> None:

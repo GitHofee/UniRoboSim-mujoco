@@ -2,12 +2,15 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`unirobosim-mujoco` is the MuJoCo 3.11 backend for UniRoboSim `0.9.x`. It is selected through the standard `unirobosim.backends` entry point, so the same EasyAPI application can switch to MuJoCo with `backend="mujoco"`.
+`unirobosim-mujoco` is the MuJoCo 3.11 backend for UniRoboSim Core `0.9.x`
+and `0.10.x`. It is selected through the standard `unirobosim.backends` entry
+point, so the same EasyAPI application can switch to MuJoCo with
+`backend="mujoco"`.
 
 ## Compatibility and installation
 
 - Python `>=3.12,<3.13`
-- UniRoboSim `>=0.9,<0.10`
+- UniRoboSim `>=0.9,<0.11`
 - MuJoCo `3.11.0`
 - NumPy `>=2.2,<3`
 - Runtime contract `v0alpha5`
@@ -59,6 +62,20 @@ provider = MuJoCoProvider(MuJoCoAdapterConfig(position_stiffness=150.0, max_moto
 sim = Sim(provider=provider)
 ```
 
+The installed factory also accepts FastSim's canonical launch profile:
+
+```python
+from unirobosim_mujoco import create_provider
+
+provider = create_provider(launch_profile="headless")
+```
+
+`visible` enables the native window and cameras, `headless` disables the window but
+keeps on-demand camera rendering, and `headless-physics` disables both. Camera
+capabilities and camera worlds fail closed in the physics-only profile. A zero-argument
+call keeps the existing headless camera-enabled behavior. Visible worlds remain
+single-environment only.
+
 ## Implemented capabilities
 
 - native MJCF and URDF articulation loading;
@@ -88,6 +105,7 @@ coverage run -m pytest
 coverage report
 ```
 
-The 0.9.0 native suite passes 17 tests, including the DROID planning and same-tick command slice.
+The 0.9.1 suite covers the launch-profile factory in addition to native DROID planning
+and same-tick command execution.
 
 Portable API documentation is maintained in [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git).

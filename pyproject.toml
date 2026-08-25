@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unirobosim-mujoco"
-version = "0.9.0"
+version = "0.9.1"
 description = "MuJoCo adapter for UniRoboSim"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-authors = [{name = "UniRoboSim Contributors"}]
-dependencies = ["unirobosim>=0.9,<0.10", "mujoco==3.11.0", "numpy>=2.2,<3"]
+authors = [{name = "Hofee", email = "lexhofee@gmail.com"}]
+dependencies = ["unirobosim>=0.9,<0.11", "mujoco==3.11.0", "numpy>=2.2,<3"]
 
 [project.optional-dependencies]
 dev = ["mypy>=1.15,<2", "pytest>=8,<10", "pytest-cov>=6,<8", "ruff>=0.11,<1"]
@@ -30,6 +30,7 @@ testpaths = ["tests"]
 [tool.coverage.run]
 branch = true
 source = ["unirobosim_mujoco"]
+omit = ["*/droid_acceptance.py"]
 
 [tool.coverage.report]
 fail_under = 85
