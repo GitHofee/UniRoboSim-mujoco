@@ -95,6 +95,15 @@ def _xyz(values: tuple[float, float, float]) -> str:
     return " ".join(str(value) for value in values)
 
 
+def _uint8_array(shape: tuple[int, ...], data: bytes) -> ArrayValue:
+    """Use Core's compact byte storage while retaining Core 0.9 compatibility."""
+
+    factory = getattr(ArrayValue, "from_uint8_bytes", None)
+    if callable(factory):
+        return cast(ArrayValue, factory(shape, data))
+    return ArrayValue(shape, tuple(data), dtype="uint8")
+
+
 class MuJoCoWorld:
     def __init__(
         self,
@@ -851,7 +860,8 @@ class MuJoCoWorld:
         assert native.camera_name is not None
         channels: list[SensorChannel] = []
         for modality in entity.camera.modalities:
-            values: list[float | int] = []
+            rgb_frames: list[bytes] = []
+            depth_values: list[float | int] = []
             for environment, (model, data) in enumerate(zip(self._models, self._data, strict=True)):
                 key = (environment, entity.camera.width_px, entity.camera.height_px)
                 renderer = self._renderers.get(key)
@@ -864,16 +874,30 @@ class MuJoCoWorld:
                     renderer.disable_depth_rendering()
                 renderer.update_scene(data, camera=native.camera_name)
                 image = renderer.render()
-                values.extend(image.reshape(-1).tolist())
+                if modality is CameraModality.RGB:
+                    expected_native_shape = (entity.camera.height_px, entity.camera.width_px, 3)
+                    if image.shape != expected_native_shape or image.dtype != np.dtype("uint8"):
+                        raise CommandError(
+                            "native RGB frame has an unexpected shape or dtype",
+                            operation=operation,
+                        )
+                    rgb_frames.append(np.ascontiguousarray(image).tobytes(order="C"))
+                else:
+                    depth_values.extend(image.reshape(-1).tolist())
             shape = (
                 (self._spec.environments.count, entity.camera.height_px, entity.camera.width_px, 3)
                 if modality is CameraModality.RGB
                 else (self._spec.environments.count, entity.camera.height_px, entity.camera.width_px)
             )
+            value = (
+                _uint8_array(shape, b"".join(rgb_frames))
+                if modality is CameraModality.RGB
+                else ArrayValue(shape, tuple(depth_values), dtype="float32")
+            )
             channels.append(
                 SensorChannel(
                     modality,
-                    ArrayValue(shape, tuple(values), dtype="uint8" if modality is CameraModality.RGB else "float32"),
+                    value,
                 )
             )
         return SensorSample(handle, tuple(channels), self.tick)

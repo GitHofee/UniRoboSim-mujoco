@@ -105,7 +105,7 @@ coverage run -m pytest
 coverage report
 ```
 
-The 0.9.1 suite covers the launch-profile factory in addition to native DROID planning
-and same-tick command execution.
+The 0.9.2 suite covers packed RGB camera delivery and the launch-profile factory in
+addition to native DROID planning and same-tick command execution.
 
 Portable API documentation is maintained in [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git).

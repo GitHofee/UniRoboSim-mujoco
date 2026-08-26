@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.2 - 2026-08-26
+
+- Return RGB camera channels through Core's compact immutable byte storage so
+  FastSim simulation queries receive tightly packed RGB24 frames without expanding
+  every pixel into Python integers.
+- Retain the scalar tuple fallback when running with UniRoboSim Core 0.9.
+- Make the DROID acceptance asset portable through explicit, config, environment,
+  and backward-compatible user-local discovery instead of a packaged host path.
+
 ## 0.9.1 - 2026-08-26
 
 - Add the canonical `visible`, `headless`, and `headless-physics` factory profiles

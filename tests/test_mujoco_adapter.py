@@ -156,7 +156,7 @@ def scene_command(
 
 
 def test_probe_config_and_lifecycle() -> None:
-    assert __version__ == "0.9.1"
+    assert __version__ == "0.9.2"
     assert DESCRIPTOR.version == __version__
     assert DESCRIPTOR.contract_version == "v0alpha5"
     provider = MuJoCoProvider()
@@ -628,7 +628,13 @@ def test_native_offscreen_camera_rgb_and_depth() -> None:
     world = session.build(world_spec(camera=True))
     try:
         sample = world.read_sensor(world.resolve(EntityPath("/camera")))
-        assert sample.channel(CameraModality.RGB).shape == (2, 24, 32, 3)
+        rgb = sample.channel(CameraModality.RGB)
+        assert rgb.shape == (2, 24, 32, 3)
+        assert rgb.dtype == "uint8" and rgb.device == "cpu"
+        if callable(getattr(ArrayValue, "from_uint8_bytes", None)):
+            assert rgb.is_packed is True
+            assert type(rgb.to_bytes()) is bytes
+            assert len(rgb.to_bytes()) == 2 * 24 * 32 * 3
         assert sample.channel(CameraModality.DEPTH).shape == (2, 24, 32)
         camera = world._entities[EntityPath("/camera")].camera
         assert camera is not None
@@ -641,6 +647,18 @@ def test_native_offscreen_camera_rgb_and_depth() -> None:
         assert float(world._models[0].cam_fovy[0]) == pytest.approx(expected_vertical_fov)
     finally:
         session.close()
+
+
+def test_1280x720_rgb_payload_uses_compact_immutable_storage() -> None:
+    shape = (1, 720, 1280, 3)
+    payload = bytes(720 * 1280 * 3)
+
+    value = world_module._uint8_array(shape, payload)
+
+    assert value.shape == shape and value.dtype == "uint8" and value.device == "cpu"
+    if callable(getattr(ArrayValue, "from_uint8_bytes", None)):
+        assert value.is_packed is True
+        assert value.to_bytes() is payload
 
 
 def test_lifecycle_and_command_validation_boundaries() -> None:

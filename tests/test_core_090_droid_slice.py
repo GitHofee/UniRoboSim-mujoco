@@ -14,6 +14,8 @@ from unirobosim import (
     BuildResourceEntry,
     BuildResourceManifest,
     BuildSourceEntry,
+    CameraModality,
+    CameraSpec,
     CapabilityId,
     CapabilityRequirement,
     CommandError,
@@ -23,6 +25,7 @@ from unirobosim import (
     EntitySpec,
     LocalSourceIdentity,
     PlanningJointType,
+    Pose,
     WorldSpec,
 )
 
@@ -117,6 +120,12 @@ def test_core_090_v5_droid_planning_units_resources_and_same_tick_commands() -> 
                 asset_uri=str(_DROID_URDF),
                 joint_position_units=("rad",) * 13,
             ),
+            EntitySpec(
+                EntityPath("/camera"),
+                EntityKind.CAMERA_SENSOR,
+                pose=Pose((2.0, 0.0, 1.5), (0.0, 0.7071067811865475, 0.0, 0.7071067811865475)),
+                camera=CameraSpec(1280, 720, modalities=(CameraModality.RGB,)),
+            ),
         ),
         requirements=(CapabilityRequirement(CapabilityId("planning.scene@2")),),
         schema_version=PHYSICAL_WORLD_SCHEMA_VERSION,
@@ -186,6 +195,12 @@ def test_core_090_v5_droid_planning_units_resources_and_same_tick_commands() -> 
         world.step(10)
         assert planning_world.planning_scene_delta(sequence).kind.value == "state"
         assert world.read_articulation(handle).joint_positions.rows()[0] != before
+        rgb = world.read_sensor(world.resolve(EntityPath("/camera"))).channel(CameraModality.RGB)
+        assert rgb.shape == (1, 720, 1280, 3)
+        assert rgb.dtype == "uint8" and rgb.device == "cpu"
+        if callable(getattr(ArrayValue, "from_uint8_bytes", None)):
+            assert rgb.is_packed is True
+            assert len(rgb.to_bytes()) == 720 * 1280 * 3
     finally:
         world.close()
         session.close()

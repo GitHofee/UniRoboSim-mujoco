@@ -10,6 +10,7 @@ import re
 import subprocess
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -32,8 +33,8 @@ from unirobosim import (
 )
 
 from . import MuJoCoAdapterConfig, create_provider
+from ._droid_asset import resolve_droid_asset_path
 
-_ASSET = Path("/home/ubuntu/projects/gen_data/data/robots/droid/droid_mujoco.urdf")
 _ARM = tuple(f"panda_joint{index}" for index in range(1, 8))
 _GRIPPER = (
     "robotiq_85_left_knuckle_joint",
@@ -111,7 +112,7 @@ def _create_acceptance_provider(
 @dataclass(frozen=True, slots=True)
 class _Distribution:
     name: str = "unirobosim-mujoco"
-    version: str = "0.9.1"
+    version: str = "0.9.2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,7 +211,7 @@ def _scenario(entity: dict[str, object]) -> Any:
     )
 
 
-def _execution_plan(spec: Any, *, visible_window: bool = False) -> Any:
+def _execution_plan(spec: Any, asset: Path, *, visible_window: bool = False) -> Any:
     from fastsim.plan import (
         ExecutionPlan,
         ResolvedComponent,
@@ -219,7 +220,6 @@ def _execution_plan(spec: Any, *, visible_window: bool = False) -> Any:
         freeze,
     )
 
-    asset = _ASSET.resolve(strict=True)
     asset_sha256 = hashlib.sha256(asset.read_bytes()).hexdigest()
     joints = _ARM + _GRIPPER
     initial = tuple(float(value) for value in spec["robot"]["initial_joint_position"]) + tuple(
@@ -753,14 +753,22 @@ def create_backend_run(
     output_dir: Path,
     *,
     visible_window: bool = False,
+    asset_path: str | os.PathLike[str] | None = None,
 ) -> _BackendRun:
-    """Return one unprepared real FastSim bundle and its committed sample cache."""
+    """Return one unprepared real FastSim bundle and its committed sample cache.
+
+    ``asset_path`` has highest precedence, followed by ``robot.asset_path`` in
+    ``spec``, ``UNIROBOSIM_DROID_ASSET``, and an existing legacy user-local path.
+    """
 
     if not isinstance(visible_window, bool):
         raise TypeError("visible_window must be a boolean")
     if run_kind not in {"rulebased_blocking", "model_servo_preempt"}:
         raise ValueError("unsupported DROID equivalence run kind")
-    plan = _execution_plan(spec, visible_window=visible_window)
+    robot = spec.get("robot") if isinstance(spec, Mapping) else None
+    configured_asset = robot.get("asset_path") if isinstance(robot, Mapping) else None
+    asset = resolve_droid_asset_path(asset_path, configured_asset_path=configured_asset)
+    plan = _execution_plan(spec, asset, visible_window=visible_window)
     projection = _acceptance_projection(plan, spec, visible_window=visible_window)
     sample_stride = int(spec["simulation"]["physics_hz"]) // int(spec["simulation"]["sample_hz"])
     bundle, capture = _bundle(

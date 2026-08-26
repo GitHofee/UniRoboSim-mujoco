@@ -103,6 +103,7 @@ coverage run -m pytest
 coverage report
 ```
 
-0.9.1 测试套件除原生 DROID planning 和同 tick 命令执行外，还覆盖启动档位工厂。
+0.9.2 测试套件除原生 DROID planning、同 tick 命令执行和启动档位工厂外，还覆盖
+紧密存储的 RGB 相机数据。
 
 可移植 API 文档位于 [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git)。
