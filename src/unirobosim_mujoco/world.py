@@ -6,7 +6,7 @@ import hashlib
 import importlib
 import math
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
@@ -68,6 +68,7 @@ from unirobosim import (
 )
 
 if TYPE_CHECKING:
+    from .articulation_drive import CompiledMuJoCoArticulationDrive
     from .build_assets import BuildAssetLease
     from .provider import MuJoCoSession
 
@@ -111,6 +112,9 @@ class MuJoCoWorld:
         spec: WorldSpec,
         generation: int,
         asset_lease: BuildAssetLease | None = None,
+        *,
+        native_substeps_per_logical_step: int,
+        articulation_drive_profiles: Mapping[EntityPath, CompiledMuJoCoArticulationDrive] | None = None,
     ) -> None:
         self._validate_spec(spec, session.descriptor.provider_id)
         if not session.config.headless and spec.environments.count != 1:
@@ -130,7 +134,17 @@ class MuJoCoWorld:
         self._scene_sequence = 0
         self._entities = {entity.path: entity for entity in spec.entities}
         self._asset_lease = asset_lease
-        self._models, names = self._build_models(spec, asset_lease)
+        self._native_substeps_per_logical_step = native_substeps_per_logical_step
+        self._native_time_step_seconds = spec.physics.time_step_seconds / self._native_substeps_per_logical_step
+        self._articulation_drive_profiles = articulation_drive_profiles
+        self._apply_controls_for_step: Callable[[int], None] = (
+            self._apply_controls if articulation_drive_profiles is None else self._apply_profiled_controls
+        )
+        self._models, names = self._build_models(
+            spec,
+            asset_lease,
+            native_time_step_seconds=self._native_time_step_seconds,
+        )
         self._data = [mujoco.MjData(model) for model in self._models]
         self._native = self._resolve_native(self._models[0], spec, names)
         self._commands: list[dict[EntityPath, list[tuple[CommandMode, float]]]] = [
@@ -252,10 +266,15 @@ class MuJoCoWorld:
         cls,
         spec: WorldSpec,
         asset_lease: BuildAssetLease | None,
+        *,
+        native_time_step_seconds: float,
     ) -> tuple[list[Any], dict[EntityPath, dict[str, object]]]:
         asset = next((entity for entity in spec.entities if entity.asset_uri is not None), None)
         if asset is None:
-            xml, procedural_names = cls._build_xml(spec)
+            xml, procedural_names = cls._build_xml(
+                spec,
+                native_time_step_seconds=native_time_step_seconds,
+            )
             return (
                 [mujoco.MjModel.from_xml_string(xml) for _ in range(spec.environments.count)],
                 procedural_names,
@@ -267,7 +286,7 @@ class MuJoCoWorld:
         # triangle inequality. MuJoCo's documented compiler repair preserves the
         # source file and produces a positive, balanced inertia tensor.
         native_spec.compiler.balanceinertia = True
-        native_spec.option.timestep = spec.physics.time_step_seconds
+        native_spec.option.timestep = native_time_step_seconds
         native_spec.option.gravity = spec.physics.gravity_m_s2
         cameras = tuple(
             entity.camera for entity in spec.entities if entity.kind is EntityKind.CAMERA_SENSOR and entity.camera
@@ -409,12 +428,16 @@ class MuJoCoWorld:
         return models, names
 
     @staticmethod
-    def _build_xml(spec: WorldSpec) -> tuple[str, dict[EntityPath, dict[str, object]]]:
+    def _build_xml(
+        spec: WorldSpec,
+        *,
+        native_time_step_seconds: float,
+    ) -> tuple[str, dict[EntityPath, dict[str, object]]]:
         root = ET.Element("mujoco", model=spec.world_id)
         ET.SubElement(
             root,
             "option",
-            timestep=str(spec.physics.time_step_seconds),
+            timestep=str(native_time_step_seconds),
             gravity=_xyz(spec.physics.gravity_m_s2),
         )
         worldbody = ET.SubElement(root, "worldbody")
@@ -587,6 +610,24 @@ class MuJoCoWorld:
     @property
     def tick(self) -> Tick:
         return Tick(self._step_index, self._step_index * self._spec.physics.time_step_seconds)
+
+    @property
+    def native_time_step_seconds(self) -> float:
+        """Effective MuJoCo integration step beneath one logical World step."""
+
+        return self._native_time_step_seconds
+
+    @property
+    def logical_time_step_seconds(self) -> float:
+        """World time committed by one public step."""
+
+        return self._spec.physics.time_step_seconds
+
+    @property
+    def native_substeps_per_logical_step(self) -> int:
+        """Number of MuJoCo integrations committed by one logical World step."""
+
+        return self._native_substeps_per_logical_step
 
     @property
     def build_report(self) -> BuildReport:
@@ -975,24 +1016,59 @@ class MuJoCoWorld:
             data.xfrc_applied[body_id, :3] = wrench_force
             data.xfrc_applied[body_id, 3:] = wrench_torque
 
+    def _apply_profiled_controls(self, environment: int) -> None:
+        profiles = self._articulation_drive_profiles
+        assert profiles is not None
+        data = self._data[environment]
+        data.qfrc_applied[:] = 0.0
+        data.xfrc_applied[:] = 0.0
+        for path, commands in self._commands[environment].items():
+            native = self._native[path]
+            drive = profiles[path]
+            for index, (mode, target) in enumerate(commands):
+                qpos_address = native.joint_qpos_addresses[index]
+                dof_address = native.joint_dof_addresses[index]
+                if mode is CommandMode.POSITION:
+                    joint_force = drive.position_stiffness[index] * (
+                        target - float(data.qpos[qpos_address])
+                    ) - drive.position_damping[index] * float(data.qvel[dof_address])
+                    joint_force += float(data.qfrc_bias[dof_address])
+                elif mode is CommandMode.VELOCITY:
+                    joint_force = self._session.config.velocity_gain * (target - float(data.qvel[dof_address]))
+                    joint_force += float(data.qfrc_bias[dof_address])
+                else:
+                    joint_force = target
+                if native.spec.joint_effort_limits:
+                    effort_limit = native.spec.joint_effort_limits[index]
+                    lower, upper = -effort_limit, effort_limit
+                else:
+                    effort_limit = self._session.config.max_motor_effort
+                    lower, upper = -effort_limit, effort_limit
+                data.qfrc_applied[dof_address] += max(lower, min(upper, joint_force))
+        for path, (wrench_force, wrench_torque) in self._rigid_wrenches[environment].items():
+            body_id = self._native[path].body_id
+            assert body_id is not None
+            data.xfrc_applied[body_id, :3] = wrench_force
+            data.xfrc_applied[body_id, 3:] = wrench_torque
+
     def step(self, count: int = 1) -> Tick:
         self._ensure("mujoco.world.step")
         if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
             raise ValidationError("step count must be positive", operation="mujoco.world.step")
         for _ in range(count):
-            for environment, (model, data) in enumerate(zip(self._models, self._data, strict=True)):
-                self._apply_controls(environment)
-                mujoco.mj_step(model, data)
-                if self._viewers:
-                    viewer = self._viewers[environment]
-                    if not viewer.is_running():
-                        raise LifecycleError(
-                            "MuJoCo GUI viewer closed while the world is running",
-                            operation="mujoco.world.step",
-                            backend_id=self._session.descriptor.provider_id,
-                            world_id=self.world_id,
-                        )
-                    viewer.sync()
+            for _native_substep in range(self._native_substeps_per_logical_step):
+                for environment, (model, data) in enumerate(zip(self._models, self._data, strict=True)):
+                    self._apply_controls_for_step(environment)
+                    mujoco.mj_step(model, data)
+            for viewer in self._viewers:
+                if not viewer.is_running():
+                    raise LifecycleError(
+                        "MuJoCo GUI viewer closed while the world is running",
+                        operation="mujoco.world.step",
+                        backend_id=self._session.descriptor.provider_id,
+                        world_id=self.world_id,
+                    )
+                viewer.sync()
             self._step_index += 1
             for key, expiration in tuple(self._debug_expiration.items()):
                 if expiration is not None and expiration <= self._step_index:

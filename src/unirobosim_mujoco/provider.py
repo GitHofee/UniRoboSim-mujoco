@@ -150,6 +150,17 @@ class MuJoCoSession:
                 world_id=spec.world_id,
                 details={"negotiation": negotiation.to_dict()},
             )
+        native_substeps = self.config.native_substeps_for(
+            spec.physics.time_step_seconds,
+            spec.physics.substeps,
+        )
+        from .articulation_drive import compile_articulation_drive_profiles
+
+        articulation_drive_profiles = compile_articulation_drive_profiles(
+            spec,
+            self.config,
+            provider_id=self.descriptor.provider_id,
+        )
         asset_lease = snapshot_build_input(spec, build_input)
         self._generation += 1
         from .world import MuJoCoWorld
@@ -159,9 +170,23 @@ class MuJoCoSession:
             if CapabilityId("planning.scene@2") in negotiation.matched:
                 from .planning import MuJoCoPlanningWorld
 
-                world = MuJoCoPlanningWorld(self, spec, self._generation, asset_lease)
+                world = MuJoCoPlanningWorld(
+                    self,
+                    spec,
+                    self._generation,
+                    asset_lease,
+                    native_substeps_per_logical_step=native_substeps,
+                    articulation_drive_profiles=articulation_drive_profiles,
+                )
             else:
-                world = MuJoCoWorld(self, spec, self._generation, asset_lease)
+                world = MuJoCoWorld(
+                    self,
+                    spec,
+                    self._generation,
+                    asset_lease,
+                    native_substeps_per_logical_step=native_substeps,
+                    articulation_drive_profiles=articulation_drive_profiles,
+                )
         except PlanningSceneError:
             if asset_lease is not None:
                 asset_lease.close()

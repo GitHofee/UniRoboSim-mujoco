@@ -30,9 +30,17 @@ from unirobosim import (
 )
 
 from unirobosim_mujoco import MuJoCoProvider
+from unirobosim_mujoco._droid_asset import resolve_droid_asset_path
 
-_DROID_ROOT = Path("/home/ubuntu/projects/gen_data/data/robots/droid")
-_DROID_URDF = _DROID_ROOT / "droid_mujoco.urdf"
+
+def _discover_droid_urdf() -> Path | None:
+    try:
+        return resolve_droid_asset_path()
+    except FileNotFoundError:
+        return None
+
+
+_DROID_URDF = _discover_droid_urdf()
 _ARM = tuple(f"panda_joint{index}" for index in range(1, 8))
 _GRIPPER = (
     "robotiq_85_left_knuckle_joint",
@@ -45,6 +53,8 @@ _GRIPPER = (
 
 
 def _build_input() -> BuildInput:
+    assert _DROID_URDF is not None
+    droid_root = _DROID_URDF.parent
     relative_paths = sorted(
         {_DROID_URDF.name}
         | {element.attrib["filename"] for element in ET.parse(_DROID_URDF).getroot().findall(".//mesh")}
@@ -60,7 +70,7 @@ def _build_input() -> BuildInput:
     dependencies = tuple(sorted(resource_id[path] for path in relative_paths if path != _DROID_URDF.name))
     records = []
     for relative_path in relative_paths:
-        source_path = (_DROID_ROOT / relative_path).resolve()
+        source_path = (droid_root / relative_path).resolve()
         payload = source_path.read_bytes()
         sha256 = hashlib.sha256(payload).hexdigest()
         stat = source_path.stat()
@@ -104,8 +114,9 @@ def _build_input() -> BuildInput:
     )
 
 
-@pytest.mark.skipif(not _DROID_URDF.is_file(), reason="named DROID acceptance asset is unavailable")
+@pytest.mark.skipif(_DROID_URDF is None, reason="named DROID acceptance asset is unavailable")
 def test_core_090_v5_droid_planning_units_resources_and_same_tick_commands() -> None:
+    assert _DROID_URDF is not None
     build_input = _build_input()
     joint_names = _ARM + _GRIPPER
     initial = (0.0, -0.2, 0.0, -1.8, 0.0, 1.6, 0.7) + (0.0,) * 6

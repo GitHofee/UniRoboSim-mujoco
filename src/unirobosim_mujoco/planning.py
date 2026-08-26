@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,7 @@ from unirobosim import (
     PLANNING_SYSTEM_ENTITY_ID,
     PLANNING_SYSTEM_ENTITY_PATH,
     EntityKind,
+    EntityPath,
     PlanningArticulationState,
     PlanningEntityDescriptor,
     PlanningEntityKind,
@@ -60,6 +62,7 @@ from unirobosim import (
     WorldState,
 )
 
+from .articulation_drive import CompiledMuJoCoArticulationDrive
 from .build_assets import BuildAssetLease
 from .world import MuJoCoWorld, mujoco
 
@@ -166,8 +169,18 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
         spec: WorldSpec,
         generation: int,
         asset_lease: BuildAssetLease | None,
+        *,
+        native_substeps_per_logical_step: int,
+        articulation_drive_profiles: Mapping[EntityPath, CompiledMuJoCoArticulationDrive] | None = None,
     ) -> None:
-        super().__init__(session, spec, generation, asset_lease)
+        super().__init__(
+            session,
+            spec,
+            generation,
+            asset_lease,
+            native_substeps_per_logical_step=native_substeps_per_logical_step,
+            articulation_drive_profiles=articulation_drive_profiles,
+        )
         self._planning_sequence = 1
         self._planning_world_revision = 1
         self._planning_transform_revision = 1
@@ -422,7 +435,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
             int(model.geom_conaffinity[geom_id]),
             _provenance(
                 {
-                    "adapter": "unirobosim-mujoco@0.9.2",
+                    "adapter": "unirobosim-mujoco@0.9.3",
                     "native_profile": "mujoco-3.11-compiled-mesh",
                     "geom_id": geom_id,
                     "mesh_id": mesh_id,
@@ -476,7 +489,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
                 2**32 - 1,
                 _provenance(
                     {
-                        "adapter": "unirobosim-mujoco@0.9.2",
+                        "adapter": "unirobosim-mujoco@0.9.3",
                         "native_profile": "mujoco-plane-z0",
                     }
                 ),
@@ -556,7 +569,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
                             int(model.geom_conaffinity[native_geom_id]),
                             _provenance(
                                 {
-                                    "adapter": "unirobosim-mujoco@0.9.2",
+                                    "adapter": "unirobosim-mujoco@0.9.3",
                                     "native_profile": "mujoco-box",
                                     "dimensions_m": dimensions,
                                 }

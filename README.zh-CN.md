@@ -80,6 +80,8 @@ provider = create_provider(launch_profile="headless")
 - 原生 MJCF 刚体和可移植 Box；
 - 刚体状态、持续 wrench、二值/净法向接触；
 - 关节位置、速度和力矩控制；
+- 在 World 构建期编译、由组件持有的逐铰接体位置驱动参数；
+- 不改变公共逻辑 tick 的有界原生积分子步；
 - RGB/深度相机；
 - 多环境世界；
 - 后端中立 Debug 存储和 native scene lowering；
@@ -103,7 +105,7 @@ coverage run -m pytest
 coverage report
 ```
 
-0.9.2 测试套件除原生 DROID planning、同 tick 命令执行和启动档位工厂外，还覆盖
-紧密存储的 RGB 相机数据。
+0.9.3 测试套件进一步覆盖严格的驱动参数校验、不同实体的同名关节隔离、逻辑/原生
+时间不变量和确定性的原生积分子步。
 
 可移植 API 文档位于 [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git)。

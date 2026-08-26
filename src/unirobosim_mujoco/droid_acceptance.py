@@ -112,7 +112,7 @@ def _create_acceptance_provider(
 @dataclass(frozen=True, slots=True)
 class _Distribution:
     name: str = "unirobosim-mujoco"
-    version: str = "0.9.2"
+    version: str = "0.9.3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,7 +529,10 @@ class _CaptureParticipant:
         physics_diagnostics = MappingProxyType(
             {
                 "gravity_m_s2": tuple(float(item) for item in model.opt.gravity),
-                "source": "MjModel.opt.gravity read after native world build",
+                "native_step_dt_seconds": world.native_time_step_seconds,
+                "substeps": world.native_substeps_per_logical_step,
+                "world_step_dt_seconds": world.logical_time_step_seconds,
+                "source": "effective MuJoCo world and MjModel values read after native world build",
             }
         )
         sample = MappingProxyType(

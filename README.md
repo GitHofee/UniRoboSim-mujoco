@@ -82,6 +82,8 @@ single-environment only.
 - native MJCF rigid assets and portable boxes;
 - rigid state, persistent wrench, binary/net-normal contact;
 - articulation position, velocity, and effort commands;
+- component-owned, per-articulation position-drive profiles compiled at world build;
+- bounded native integration substeps without changing the public logical tick;
 - RGB/depth cameras;
 - multi-environment worlds;
 - backend-neutral debug storage/native-scene lowering;
@@ -105,7 +107,7 @@ coverage run -m pytest
 coverage report
 ```
 
-The 0.9.2 suite covers packed RGB camera delivery and the launch-profile factory in
-addition to native DROID planning and same-tick command execution.
+The 0.9.3 suite additionally covers strict drive-profile validation, same-named joints
+on separate entities, logical/native time invariants, and deterministic native substeps.
 
 Portable API documentation is maintained in [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git).

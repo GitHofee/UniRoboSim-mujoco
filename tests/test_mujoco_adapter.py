@@ -156,7 +156,7 @@ def scene_command(
 
 
 def test_probe_config_and_lifecycle() -> None:
-    assert __version__ == "0.9.2"
+    assert __version__ == "0.9.3"
     assert DESCRIPTOR.version == __version__
     assert DESCRIPTOR.contract_version == "v0alpha5"
     provider = MuJoCoProvider()
@@ -191,6 +191,136 @@ def test_probe_config_and_lifecycle() -> None:
     world.close()
     assert session.state.value == "open"
     session.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_native_time_step_seconds", 0.0),
+        ("max_native_time_step_seconds", -0.001),
+        ("max_native_time_step_seconds", float("nan")),
+        ("max_native_time_step_seconds", float("inf")),
+        ("max_native_time_step_seconds", True),
+        ("max_native_substeps_per_logical_step", 0),
+        ("max_native_substeps_per_logical_step", -1),
+        ("max_native_substeps_per_logical_step", 1.5),
+        ("max_native_substeps_per_logical_step", True),
+    ],
+)
+def test_native_step_config_rejects_invalid_limits(field: str, value: object) -> None:
+    with pytest.raises(ValidationError):
+        cast(Any, MuJoCoAdapterConfig)(**{field: value})
+
+
+def test_native_step_schedule_handles_exact_nondivisible_authored_and_extreme_steps() -> None:
+    defaults = MuJoCoAdapterConfig()
+    assert defaults.max_native_time_step_seconds == pytest.approx(1.0 / 240.0)
+    assert defaults.native_substeps_for(1.0 / 60.0, 1) == 4
+    assert defaults.native_substeps_for(1.0 / 60.0, 8) == 8
+    assert defaults.native_substeps_for(1.0e-9, 1) == 1
+
+    nondivisible = MuJoCoAdapterConfig(max_native_time_step_seconds=0.004)
+    resolved = nondivisible.native_substeps_for(0.01, 2)
+    assert resolved == 3
+    assert 0.01 / resolved <= nondivisible.max_native_time_step_seconds
+    assert 0.01 / (resolved - 1) > nondivisible.max_native_time_step_seconds
+
+    bounded = MuJoCoAdapterConfig(
+        max_native_time_step_seconds=0.001,
+        max_native_substeps_per_logical_step=4,
+    )
+    with pytest.raises(ValidationError, match="more native substeps") as caught:
+        bounded.native_substeps_for(0.01, 1)
+    assert caught.value.details["required_native_substeps"] == 10
+    with pytest.raises(ValidationError, match="more native substeps"):
+        bounded.native_substeps_for(1.0e308, 1)
+    with pytest.raises(ValidationError, match="more native substeps") as authored_caught:
+        bounded.native_substeps_for(0.001, 5)
+    assert authored_caught.value.details["required_native_substeps"] == 5
+
+
+def test_native_substeps_preserve_logical_tick_time_and_authored_minimum() -> None:
+    config = MuJoCoAdapterConfig(max_native_time_step_seconds=0.004)
+    session = MuJoCoProvider(config).open()
+    spec = replace(
+        world_spec(),
+        environments=EnvironmentSpec(1),
+        physics=PhysicsSpec(time_step_seconds=0.01, substeps=2, gravity_m_s2=(0.0, 0.0, 0.0)),
+    )
+    world = session.build(spec)
+    try:
+        assert world.logical_time_step_seconds == pytest.approx(0.01)
+        assert world.native_substeps_per_logical_step == 3
+        assert world.native_time_step_seconds == pytest.approx(0.01 / 3.0)
+        assert float(world._models[0].opt.timestep) == pytest.approx(0.01 / 3.0)
+        tick = world.step(2)
+        assert tick.step_index == 2
+        assert tick.sim_time_seconds == pytest.approx(0.02)
+        assert float(world._data[0].time) == pytest.approx(0.02)
+    finally:
+        world.close()
+        session.close()
+
+    authored_session = MuJoCoProvider().open()
+    authored_spec = replace(
+        world_spec(),
+        environments=EnvironmentSpec(1),
+        physics=PhysicsSpec(time_step_seconds=0.002, substeps=3, gravity_m_s2=(0.0, 0.0, 0.0)),
+    )
+    authored_world = authored_session.build(authored_spec)
+    try:
+        assert authored_world.native_substeps_per_logical_step == 3
+        assert authored_world.native_time_step_seconds == pytest.approx(0.002 / 3.0)
+        tick = authored_world.step()
+        assert tick.step_index == 1
+        assert tick.sim_time_seconds == pytest.approx(0.002)
+        assert float(authored_world._data[0].time) == pytest.approx(0.002)
+    finally:
+        authored_world.close()
+        authored_session.close()
+
+
+def test_native_substep_control_hold_reset_and_determinism() -> None:
+    def run_once() -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]:
+        session = MuJoCoProvider().open()
+        spec = replace(
+            world_spec(),
+            environments=EnvironmentSpec(1),
+            physics=PhysicsSpec(time_step_seconds=1.0 / 60.0, gravity_m_s2=(0.0, 0.0, 0.0)),
+        )
+        world = session.build(spec)
+        try:
+            assert world.native_substeps_per_logical_step == 4
+            articulation = world.resolve(EntityPath("/cabinet"))
+            initial = world.read_articulation(articulation).joint_positions.rows()[0]
+            target = (0.45, -0.45)
+            world.apply_articulation_command(
+                ArticulationCommand(
+                    articulation,
+                    CommandMode.POSITION,
+                    ArrayValue.from_rows((target,)),
+                    target_units=("rad", "rad"),
+                )
+            )
+            world.step()
+            first = world.read_articulation(articulation).joint_positions.rows()[0]
+            world.step(59)
+            held = world.read_articulation(articulation).joint_positions.rows()[0]
+            assert max(abs(value - expected) for value, expected in zip(held, target, strict=True)) < max(
+                abs(value - expected) for value, expected in zip(first, target, strict=True)
+            )
+            world.reset()
+            reset = world.read_articulation(articulation).joint_positions.rows()[0]
+            world.step(10)
+            reset_held = world.read_articulation(articulation).joint_positions.rows()[0]
+            assert reset == pytest.approx(initial)
+            assert reset_held == pytest.approx(initial, abs=1.0e-12)
+            return first, held, reset_held
+        finally:
+            world.close()
+            session.close()
+
+    assert run_once() == run_once()
 
 
 @pytest.mark.parametrize(
@@ -406,10 +536,17 @@ def test_gui_mode_launches_syncs_and_closes_passive_viewer(monkeypatch: pytest.M
     monkeypatch.setattr(world_importlib, "import_module", import_with_fake_viewer)
     provider = MuJoCoProvider(MuJoCoAdapterConfig(headless=False))
     session = provider.open()
-    single_environment = replace(world_spec(), environments=EnvironmentSpec(1))
+    single_environment = replace(
+        world_spec(),
+        environments=EnvironmentSpec(1),
+        physics=PhysicsSpec(time_step_seconds=1.0 / 60.0, gravity_m_s2=(0.0, 0.0, 0.0)),
+    )
     world = session.build(single_environment)
+    assert world.native_substeps_per_logical_step == 4
     assert len(viewers) == 1 and viewers[0].sync_count == 1
     world.step()
+    # Native integration may subdivide, but GUI publication remains once per
+    # logical World step so camera/operator scheduling does not speed up.
     assert viewers[0].sync_count == 2
     world.close()
     assert viewers[0].closed
@@ -625,8 +762,13 @@ def test_unsupported_soft_matter_fails_explicitly() -> None:
 
 def test_native_offscreen_camera_rgb_and_depth() -> None:
     session = MuJoCoProvider().open()
-    world = session.build(world_spec(camera=True))
+    spec = replace(
+        world_spec(camera=True),
+        physics=PhysicsSpec(time_step_seconds=1.0 / 60.0, gravity_m_s2=(0.0, 0.0, 0.0)),
+    )
+    world = session.build(spec)
     try:
+        assert world.native_substeps_per_logical_step == 4
         sample = world.read_sensor(world.resolve(EntityPath("/camera")))
         rgb = sample.channel(CameraModality.RGB)
         assert rgb.shape == (2, 24, 32, 3)
@@ -645,6 +787,15 @@ def test_native_offscreen_camera_rgb_and_depth() -> None:
             )
         )
         assert float(world._models[0].cam_fovy[0]) == pytest.approx(expected_vertical_fov)
+        tick = world.step()
+        assert tick.step_index == 1
+        assert tick.sim_time_seconds == pytest.approx(1.0 / 60.0)
+        assert world.read_sensor(world.resolve(EntityPath("/camera"))).tick == tick
+        world.reset()
+        reset_sample = world.read_sensor(world.resolve(EntityPath("/camera")))
+        assert reset_sample.tick == tick
+        assert world.native_substeps_per_logical_step == 4
+        assert reset_sample.channel(CameraModality.RGB).shape == (2, 24, 32, 3)
     finally:
         session.close()
 

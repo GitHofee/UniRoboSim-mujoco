@@ -54,7 +54,7 @@ def test_missing_asset_has_actionable_portable_error(tmp_path: Path) -> None:
 
     message = str(caught.value)
     assert "asset_path" in message and "robot.asset_path" in message
-    assert DROID_ASSET_ENV in message and "/home/" not in message
+    assert DROID_ASSET_ENV in message and str(Path.home()) not in message
 
 
 def test_selected_path_must_be_a_regular_file(tmp_path: Path) -> None:

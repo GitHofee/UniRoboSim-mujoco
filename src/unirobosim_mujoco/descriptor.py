@@ -99,7 +99,7 @@ PHYSICS_ONLY_CAPABILITIES = CapabilitySet(
 DESCRIPTOR = ProviderDescriptor(
     "google-deepmind.mujoco",
     "UniRoboSim MuJoCo",
-    "0.9.2",
+    "0.9.3",
     "v0alpha5",
     CAPABILITIES,
     (WORLD_SCHEMA_VERSION, PHYSICAL_WORLD_SCHEMA_VERSION),

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3 - 2026-08-26
+
+- Validate component-owned articulation drive profiles at the adapter boundary and
+  compile stiffness/damping into immutable arrays scoped by entity path.
+- Subdivide coarse logical steps into bounded native MuJoCo integration steps while
+  preserving the public logical tick, time, camera cadence, and viewer cadence.
+- Add deterministic, extreme-step, reset, camera, omission-path, and same-joint-name
+  multi-entity regression coverage.
+
 ## 0.9.2 - 2026-08-26
 
 - Return RGB camera channels through Core's compact immutable byte storage so
