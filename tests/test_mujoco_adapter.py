@@ -193,6 +193,21 @@ def test_probe_config_and_lifecycle() -> None:
     session.close()
 
 
+def test_scene_command_descriptor_matches_implemented_semantics() -> None:
+    pose_command = DESCRIPTOR.capabilities.get(CapabilityId("scene.command.pose@1"))
+    drag_command = DESCRIPTOR.capabilities.get(CapabilityId("scene.command.drag@1"))
+
+    assert pose_command is not None
+    assert drag_command is not None
+    assert drag_command.properties["entity_kinds"] == ("rigid_body",)
+    assert drag_command.properties["modes"] == ("kinematic",)
+    assert any("constraint drag" in limitation for limitation in drag_command.limitations)
+
+    physics_only = create_provider(launch_profile="headless-physics").descriptor.capabilities
+    assert physics_only.get(CapabilityId("scene.command.pose@1")) is pose_command
+    assert physics_only.get(CapabilityId("scene.command.drag@1")) is drag_command
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
