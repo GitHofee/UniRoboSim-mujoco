@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.4 - 2026-09-02
+
+- Add `checkpoint@1` for MuJoCo model state, actuator state, persistent targets,
+  controls, applied forces, mocap state, and equality activation.
+- Restore atomically with preflight and rollback without rewinding the World clock.
+
 ## 0.9.3 - 2026-08-26
 
 - Validate component-owned articulation drive profiles at the adapter boundary and

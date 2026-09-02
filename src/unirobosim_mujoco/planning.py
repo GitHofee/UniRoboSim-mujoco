@@ -435,7 +435,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
             int(model.geom_conaffinity[geom_id]),
             _provenance(
                 {
-                    "adapter": "unirobosim-mujoco@0.9.3",
+                    "adapter": "unirobosim-mujoco@0.9.4",
                     "native_profile": "mujoco-3.11-compiled-mesh",
                     "geom_id": geom_id,
                     "mesh_id": mesh_id,
@@ -489,7 +489,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
                 2**32 - 1,
                 _provenance(
                     {
-                        "adapter": "unirobosim-mujoco@0.9.3",
+                        "adapter": "unirobosim-mujoco@0.9.4",
                         "native_profile": "mujoco-plane-z0",
                     }
                 ),
@@ -569,7 +569,7 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
                             int(model.geom_conaffinity[native_geom_id]),
                             _provenance(
                                 {
-                                    "adapter": "unirobosim-mujoco@0.9.3",
+                                    "adapter": "unirobosim-mujoco@0.9.4",
                                     "native_profile": "mujoco-box",
                                     "dimensions_m": dimensions,
                                 }
@@ -1054,6 +1054,14 @@ class MuJoCoPlanningWorld(MuJoCoWorld):
 
     def reset(self, environment_indices: Any = None) -> ResetResult:
         result = super().reset(environment_indices)
+        self._planning_sequence += 1
+        self._planning_world_revision += 1
+        self._planning_transform_revision += 1
+        self._publish_planning_state()
+        return result
+
+    def restore_checkpoint(self, checkpoint: Any) -> Any:
+        result = super().restore_checkpoint(checkpoint)
         self._planning_sequence += 1
         self._planning_world_revision += 1
         self._planning_transform_revision += 1

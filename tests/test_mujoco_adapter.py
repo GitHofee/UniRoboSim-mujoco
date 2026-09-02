@@ -156,7 +156,7 @@ def scene_command(
 
 
 def test_probe_config_and_lifecycle() -> None:
-    assert __version__ == "0.9.3"
+    assert __version__ == "0.9.4"
     assert DESCRIPTOR.version == __version__
     assert DESCRIPTOR.contract_version == "v0alpha5"
     provider = MuJoCoProvider()

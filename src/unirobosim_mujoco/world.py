@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import math
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable, Mapping
@@ -24,6 +25,8 @@ from unirobosim import (
     BuildFingerprint,
     BuildReport,
     CameraModality,
+    CheckpointFidelity,
+    CheckpointRestoreResult,
     CommandError,
     CommandMode,
     ContactState,
@@ -63,9 +66,14 @@ from unirobosim import (
     UnsupportedCapabilityError,
     ValidationError,
     WorldBuildError,
+    WorldCheckpoint,
     WorldSpec,
     WorldState,
 )
+
+_CheckpointCommands = list[dict[EntityPath, list[tuple[CommandMode, float]]]]
+_CheckpointWrenches = list[dict[EntityPath, tuple[tuple[float, ...], tuple[float, ...]]]]
+_StagedCheckpoint = tuple[list[np.ndarray], _CheckpointCommands, _CheckpointWrenches]
 
 if TYPE_CHECKING:
     from .articulation_drive import CompiledMuJoCoArticulationDrive
@@ -132,6 +140,7 @@ class MuJoCoWorld:
         self._step_index = 0
         self._reset_count = 0
         self._scene_sequence = 0
+        self._checkpoint_state_revision = 0
         self._entities = {entity.path: entity for entity in spec.entities}
         self._asset_lease = asset_lease
         self._native_substeps_per_logical_step = native_substeps_per_logical_step
@@ -707,6 +716,189 @@ class MuJoCoWorld:
         self._reset_count += 1
         self._scene_sequence += 1
         return ResetResult(environments, self._reset_count, self.tick)
+
+    @staticmethod
+    def _checkpoint_state_spec() -> int:
+        return int(mujoco.mjtState.mjSTATE_INTEGRATION) & ~int(mujoco.mjtState.mjSTATE_TIME)
+
+    def _capture_checkpoint_document(self) -> dict[str, object]:
+        state_spec = self._checkpoint_state_spec()
+        states: list[list[float]] = []
+        for model, data in zip(self._models, self._data, strict=True):
+            values = np.empty(mujoco.mj_stateSize(model, state_spec), dtype=np.float64)
+            mujoco.mj_getState(model, data, values, state_spec)
+            if not np.isfinite(values).all():
+                raise RuntimeError("MuJoCo produced a non-finite integration state")
+            states.append([float(value) for value in values])
+        commands = [
+            {
+                path.value: [[mode.value, float(target)] for mode, target in values]
+                for path, values in sorted(environment.items(), key=lambda item: item[0].value)
+            }
+            for environment in self._commands
+        ]
+        wrenches = [
+            {
+                path.value: [list(force), list(torque)]
+                for path, (force, torque) in sorted(environment.items(), key=lambda item: item[0].value)
+            }
+            for environment in self._rigid_wrenches
+        ]
+        return {
+            "schema": "google-deepmind.mujoco.native-state/1",
+            "state_spec": state_spec,
+            "states": states,
+            "commands": commands,
+            "rigid_wrenches": wrenches,
+        }
+
+    def create_checkpoint(self) -> WorldCheckpoint:
+        operation = "mujoco.world.create_checkpoint"
+        self._ensure(operation)
+        document = self._capture_checkpoint_document()
+        try:
+            payload = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise ValidationError("MuJoCo checkpoint payload is invalid", operation=operation) from error
+        return WorldCheckpoint(
+            provider_id=self._session.descriptor.provider_id,
+            world_id=self.world_id,
+            source_generation=self.generation,
+            source_tick=self.tick,
+            payload_schema="google-deepmind.mujoco.physical-checkpoint/1",
+            fidelity=CheckpointFidelity.PHYSICAL,
+            payload=payload,
+            entity_count=len(self._entities),
+        )
+
+    @staticmethod
+    def _finite_vector(value: object, size: int, label: str) -> np.ndarray:
+        try:
+            result = np.asarray(value, dtype=np.float64)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"checkpoint {label} is not numeric") from error
+        if result.shape != (size,) or not np.isfinite(result).all():
+            raise ValueError(f"checkpoint {label} is invalid")
+        return result
+
+    def _stage_checkpoint_document(
+        self, document: object
+    ) -> _StagedCheckpoint:
+        if type(document) is not dict or document.get("schema") != "google-deepmind.mujoco.native-state/1":
+            raise ValueError("checkpoint native schema is invalid")
+        if set(document) != {"schema", "state_spec", "states", "commands", "rigid_wrenches"}:
+            raise ValueError("checkpoint native fields are invalid")
+        state_spec = self._checkpoint_state_spec()
+        if document["state_spec"] != state_spec:
+            raise ValueError("checkpoint MuJoCo state specification is invalid")
+        raw_states = document["states"]
+        raw_commands = document["commands"]
+        raw_wrenches = document["rigid_wrenches"]
+        environment_count = self._spec.environments.count
+        if any(
+            type(value) is not list or len(value) != environment_count
+            for value in (raw_states, raw_commands, raw_wrenches)
+        ):
+            raise ValueError("checkpoint environment count is invalid")
+        states = [
+            self._finite_vector(raw_states[index], mujoco.mj_stateSize(self._models[index], state_spec), "state")
+            for index in range(environment_count)
+        ]
+        articulation_paths = {
+            entity.path for entity in self._spec.entities if entity.kind is EntityKind.ARTICULATION
+        }
+        rigid_paths = {entity.path for entity in self._spec.entities if entity.kind is EntityKind.RIGID_BODY}
+        commands: list[dict[EntityPath, list[tuple[CommandMode, float]]]] = []
+        wrenches: list[dict[EntityPath, tuple[tuple[float, ...], tuple[float, ...]]]] = []
+        for environment in range(environment_count):
+            raw_environment_commands = raw_commands[environment]
+            if type(raw_environment_commands) is not dict or set(raw_environment_commands) != {
+                path.value for path in articulation_paths
+            }:
+                raise ValueError("checkpoint articulation command set is invalid")
+            staged_commands: dict[EntityPath, list[tuple[CommandMode, float]]] = {}
+            for path in articulation_paths:
+                entity = self._entities[path]
+                values = raw_environment_commands[path.value]
+                if type(values) is not list or len(values) != len(entity.joint_names):
+                    raise ValueError("checkpoint articulation command width is invalid")
+                staged_values: list[tuple[CommandMode, float]] = []
+                for item in values:
+                    if type(item) is not list or len(item) != 2:
+                        raise ValueError("checkpoint articulation command is invalid")
+                    mode = CommandMode(item[0])
+                    target = float(item[1])
+                    if not math.isfinite(target):
+                        raise ValueError("checkpoint articulation target is non-finite")
+                    staged_values.append((mode, target))
+                staged_commands[path] = staged_values
+            commands.append(staged_commands)
+
+            raw_environment_wrenches = raw_wrenches[environment]
+            if type(raw_environment_wrenches) is not dict or not set(raw_environment_wrenches).issubset(
+                {path.value for path in rigid_paths}
+            ):
+                raise ValueError("checkpoint rigid wrench set is invalid")
+            staged_wrenches: dict[EntityPath, tuple[tuple[float, ...], tuple[float, ...]]] = {}
+            for raw_path, raw_value in raw_environment_wrenches.items():
+                if type(raw_value) is not list or len(raw_value) != 2:
+                    raise ValueError("checkpoint rigid wrench is invalid")
+                force = self._finite_vector(raw_value[0], 3, "rigid force")
+                torque = self._finite_vector(raw_value[1], 3, "rigid torque")
+                staged_wrenches[EntityPath(raw_path)] = (
+                    tuple(float(value) for value in force),
+                    tuple(float(value) for value in torque),
+                )
+            wrenches.append(staged_wrenches)
+        return states, commands, wrenches
+
+    def _apply_staged_checkpoint(
+        self,
+        staged: _StagedCheckpoint,
+    ) -> None:
+        states, commands, wrenches = staged
+        state_spec = self._checkpoint_state_spec()
+        for model, data, values in zip(self._models, self._data, states, strict=True):
+            mujoco.mj_setState(model, data, values, state_spec)
+            mujoco.mj_forward(model, data)
+        self._commands = commands
+        self._rigid_wrenches = wrenches
+        for viewer in self._viewers:
+            viewer.sync()
+
+    def restore_checkpoint(self, checkpoint: WorldCheckpoint) -> CheckpointRestoreResult:
+        operation = "mujoco.world.restore_checkpoint"
+        self._ensure(operation)
+        if type(checkpoint) is not WorldCheckpoint:
+            raise ValidationError("operation requires a WorldCheckpoint", operation=operation)
+        if (
+            checkpoint.provider_id != self._session.descriptor.provider_id
+            or checkpoint.world_id != self.world_id
+            or checkpoint.payload_schema != "google-deepmind.mujoco.physical-checkpoint/1"
+            or checkpoint.entity_count != len(self._entities)
+        ):
+            raise ValidationError("checkpoint identity differs from the active world", operation=operation)
+        try:
+            document = json.loads(checkpoint.payload)
+            staged = self._stage_checkpoint_document(document)
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise ValidationError("checkpoint payload is invalid", operation=operation) from error
+        rollback = self._stage_checkpoint_document(self._capture_checkpoint_document())
+        try:
+            self._apply_staged_checkpoint(staged)
+        except BaseException:
+            self._apply_staged_checkpoint(rollback)
+            raise
+        self._scene_results.clear()
+        self._drags.clear()
+        self._scene_sequence += 1
+        self._checkpoint_state_revision += 1
+        return CheckpointRestoreResult(
+            generation=self.generation,
+            tick=self.tick,
+            state_revision=self._checkpoint_state_revision,
+            restored_entity_count=len(self._entities),
+        )
 
     def apply_articulation_command(self, command: ArticulationCommand) -> None:
         operation = "mujoco.world.apply_articulation_command"

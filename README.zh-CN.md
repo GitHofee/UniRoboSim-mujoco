@@ -105,7 +105,7 @@ coverage run -m pytest
 coverage report
 ```
 
-0.9.3 测试套件进一步覆盖严格的驱动参数校验、不同实体的同名关节隔离、逻辑/原生
+0.9.4 测试套件进一步覆盖物理检查点往返、严格的驱动参数校验、不同实体的同名关节隔离、逻辑/原生
 时间不变量和确定性的原生积分子步。
 
 可移植 API 文档位于 [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git)。

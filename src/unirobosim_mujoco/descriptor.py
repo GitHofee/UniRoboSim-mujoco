@@ -1,6 +1,7 @@
 """Static, import-safe MuJoCo capability declaration."""
 
 from unirobosim import (
+    CHECKPOINT_CAPABILITY_ID,
     PHYSICAL_WORLD_SCHEMA_VERSION,
     WORLD_SCHEMA_VERSION,
     CapabilityDeclaration,
@@ -36,6 +37,17 @@ CAPABILITIES = CapabilitySet(
             ),
         ),
         CapabilityDeclaration(CapabilityId("world.multi-environment@1")),
+        CapabilityDeclaration(
+            CHECKPOINT_CAPABILITY_ID,
+            FrozenMap(
+                {
+                    "atomic_scope": "world",
+                    "clock_rewind": False,
+                    "fidelity": "physical",
+                    "payload_schema": "google-deepmind.mujoco.physical-checkpoint/1",
+                }
+            ),
+        ),
         CapabilityDeclaration(CapabilityId("state.rigid_body@1")),
         CapabilityDeclaration(CapabilityId("control.rigid_body.wrench@1")),
         CapabilityDeclaration(CapabilityId("contact.binary@1")),
@@ -99,7 +111,7 @@ PHYSICS_ONLY_CAPABILITIES = CapabilitySet(
 DESCRIPTOR = ProviderDescriptor(
     "google-deepmind.mujoco",
     "UniRoboSim MuJoCo",
-    "0.9.3",
+    "0.9.4",
     "v0alpha5",
     CAPABILITIES,
     (WORLD_SCHEMA_VERSION, PHYSICAL_WORLD_SCHEMA_VERSION),

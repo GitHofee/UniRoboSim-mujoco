@@ -107,7 +107,7 @@ coverage run -m pytest
 coverage report
 ```
 
-The 0.9.3 suite additionally covers strict drive-profile validation, same-named joints
+The 0.9.4 suite additionally covers physical checkpoint round trips, strict drive-profile validation, same-named joints
 on separate entities, logical/native time invariants, and deterministic native substeps.
 
 Portable API documentation is maintained in [UniRoboSim Core](https://github.com/GitHofee/UniRoboSim.git).

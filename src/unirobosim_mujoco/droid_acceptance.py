@@ -112,7 +112,7 @@ def _create_acceptance_provider(
 @dataclass(frozen=True, slots=True)
 class _Distribution:
     name: str = "unirobosim-mujoco"
-    version: str = "0.9.3"
+    version: str = "0.9.4"
 
 
 @dataclass(frozen=True, slots=True)
