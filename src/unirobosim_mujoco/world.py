@@ -1016,16 +1016,25 @@ class MuJoCoWorld:
             raise CommandError("entity is not rigid", operation=operation)
         native = self._native[entity.path]
         assert native.free_dof_address is not None
+        assert native.free_qpos_address is not None
         poses = tuple(
             self._rigid_pose(entity.path, environment) for environment in range(self._spec.environments.count)
         )
         linear = []
         angular = []
+        world_angular = np.empty(3, dtype=np.float64)
         for environment in range(self._spec.environments.count):
             qvel = self._data[environment].qvel
             address = native.free_dof_address
             linear.append(tuple(float(qvel[address + axis]) for axis in range(3)))
-            angular.append(tuple(float(qvel[address + 3 + axis]) for axis in range(3)))
+            # Free-joint translation is world-frame, but its angular velocity is
+            # body-local. Use current qpos (not the previous-step derived xquat).
+            qpos = self._data[environment].qpos
+            quaternion_address = native.free_qpos_address + 3
+            mujoco.mju_rotVecQuat(
+                world_angular, qvel[address + 3 : address + 6], qpos[quaternion_address : quaternion_address + 4]
+            )
+            angular.append(tuple(float(value) for value in world_angular))
         return RigidBodyState(
             ArrayValue.from_rows(pose.position for pose in poses),
             ArrayValue.from_rows(pose.orientation_xyzw for pose in poses),
